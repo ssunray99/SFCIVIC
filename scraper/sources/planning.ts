@@ -93,41 +93,119 @@ export async function scrape(): Promise<void> {
         );
       });
 
-      // Look for a PDF agenda link on the event page
-      const pdfUrl = await page.evaluate((base: string): string | null => {
+      // Look for a packet page link — newer events use this pattern. Button is
+      // labeled "SUPPORTING" but the URL always contains
+      // /resource/planning-commission-hearing-packet-
+      const packetUrl = await page.evaluate((): string | null => {
         const anchors = Array.from(document.querySelectorAll('a[href]'));
         for (const a of anchors) {
-          const href = (a as HTMLAnchorElement).href.toLowerCase();
-          const text = a.textContent?.toLowerCase() ?? '';
-          if (href.endsWith('.pdf') || (href.includes(base) && text.includes('agenda'))) {
-            return (a as HTMLAnchorElement).href;
+          const href = (a as HTMLAnchorElement).href;
+          if (href.includes('/resource/planning-commission-hearing-packet-')) {
+            return href;
           }
         }
         return null;
-      }, BASE_URL);
+      });
 
-      // Decide what to store: PDF if found, otherwise the event page HTML
+      // Older events ship a single agenda PDF directly on the event page.
+      const directPdfUrl = packetUrl
+        ? null
+        : await page.evaluate((base: string): string | null => {
+            const anchors = Array.from(document.querySelectorAll('a[href]'));
+            for (const a of anchors) {
+              const href = (a as HTMLAnchorElement).href.toLowerCase();
+              const text = a.textContent?.toLowerCase() ?? '';
+              if (href.endsWith('.pdf') || (href.includes(base) && text.includes('agenda'))) {
+                return (a as HTMLAnchorElement).href;
+              }
+            }
+            return null;
+          }, BASE_URL);
+
+      // Decide what to store and what text to feed the LLM
       let bytes: Buffer;
       let mime: 'text/html' | 'application/pdf';
       let sourceUrl: string;
+      let agendaText = '';
+      let needsOcr = false;
 
-      if (pdfUrl) {
-        console.log(`[planning] downloading agenda PDF: ${pdfUrl}`);
+      if (packetUrl) {
+        console.log(`[planning] following packet: ${packetUrl}`);
         try {
-          ({ bytes, mime } = await fetchBytes(pdfUrl));
-          sourceUrl = pdfUrl;
+          await page.goto(packetUrl, { waitUntil: 'networkidle', timeout: 30_000 });
+          const packetHtml = await page.content();
+          bytes = Buffer.from(packetHtml);
+          mime = 'text/html';
+          sourceUrl = packetUrl;
+
+          const pdfLinks = await page.evaluate((): string[] =>
+            Array.from(
+              new Set(
+                Array.from(document.querySelectorAll('a[href]'))
+                  .map((a) => (a as HTMLAnchorElement).href)
+                  .filter((h) => h.toLowerCase().endsWith('.pdf')),
+              ),
+            ),
+          );
+          console.log(`[planning] packet links to ${pdfLinks.length} PDF(s)`);
+
+          // Cap per-PDF and total text to keep one bad meeting from blowing the budget
+          const MAX_PDFS = 12;
+          const MAX_TEXT_PER_PDF = 20_000;
+          const MAX_TEXT_TOTAL = 100_000;
+
+          const parts: string[] = [htmlToText(packetHtml)];
+          for (const linkedPdf of pdfLinks.slice(0, MAX_PDFS)) {
+            try {
+              const { bytes: pdfBytes } = await fetchBytes(linkedPdf);
+              const result = await extractPdfText(pdfBytes);
+              if (result.text) {
+                const label = linkedPdf.split('/').pop() ?? linkedPdf;
+                parts.push(`\n--- ${label} ---\n${result.text.slice(0, MAX_TEXT_PER_PDF)}`);
+              }
+            } catch (err) {
+              console.warn(`[planning] PDF fetch/parse failed ${linkedPdf}:`, err instanceof Error ? err.message : err);
+            }
+            if (parts.join('\n').length >= MAX_TEXT_TOTAL) break;
+          }
+          agendaText = parts.join('\n').slice(0, MAX_TEXT_TOTAL);
+
+          // Mark needs_ocr only if the packet had PDFs but none yielded text
+          if (pdfLinks.length > 0 && parts.length === 1) needsOcr = true;
+        } catch (err) {
+          console.warn(`[planning] packet fetch failed, falling back to event HTML:`, err);
+          bytes = Buffer.from(await page.content());
+          mime = 'text/html';
+          sourceUrl = eventUrl;
+          agendaText = htmlToText(bytes.toString('utf8'));
+        }
+      } else if (directPdfUrl) {
+        console.log(`[planning] downloading agenda PDF: ${directPdfUrl}`);
+        try {
+          ({ bytes, mime } = await fetchBytes(directPdfUrl));
+          sourceUrl = directPdfUrl;
         } catch (err) {
           console.warn(`[planning] PDF fetch failed, falling back to HTML:`, err);
           bytes = Buffer.from(await page.content());
           mime = 'text/html';
           sourceUrl = eventUrl;
         }
+        if (mime === 'application/pdf') {
+          const result = await extractPdfText(bytes);
+          agendaText = result.text;
+          needsOcr = result.needsOcr;
+        } else {
+          agendaText = htmlToText(bytes.toString('utf8'));
+        }
       } else {
-        console.log(`[planning] no PDF found — storing event page HTML`);
+        console.log(`[planning] no packet or PDF — storing event page HTML`);
         bytes = Buffer.from(await page.content());
         mime = 'text/html';
         sourceUrl = eventUrl;
+        agendaText = htmlToText(bytes.toString('utf8'));
       }
+
+      if (needsOcr) console.warn(`[planning] needs OCR: ${sourceUrl}`);
 
       const contentHash = sha256(bytes);
 
@@ -142,18 +220,6 @@ export async function scrape(): Promise<void> {
       if (existing) {
         console.log(`[planning] already stored, skipping`);
         continue;
-      }
-
-      // Extract plain text for LLM
-      let agendaText = '';
-      let needsOcr = false;
-      if (mime === 'application/pdf') {
-        const result = await extractPdfText(bytes);
-        agendaText = result.text;
-        needsOcr = result.needsOcr;
-        if (needsOcr) console.warn(`[planning] PDF likely scanned (needs OCR): ${sourceUrl}`);
-      } else {
-        agendaText = htmlToText(bytes.toString('utf8'));
       }
 
       // Upload to Storage
