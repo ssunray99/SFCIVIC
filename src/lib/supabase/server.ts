@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import type { Database } from '@/lib/database.types';
 
 // Anon-key client for server-side reads inside React Server Components.
 // Reads are gated by RLS policies in 0001_init.sql (public select on all tables).
@@ -11,7 +12,7 @@ export function createServerClient() {
         'Copy .env.example to .env.local and fill them in.',
     );
   }
-  return createClient(url, anonKey, {
+  return createClient<Database>(url, anonKey, {
     auth: { persistSession: false },
   });
 }

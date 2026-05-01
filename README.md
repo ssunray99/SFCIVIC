@@ -16,7 +16,7 @@ This is a learning project. The plan and milestones live at
 
 ## Status
 
-**Milestone 2 complete.** 36 Planning Commission meetings scraped and stored in Supabase. LLM extraction next.
+**Milestone 5 complete.** Homepage renders recent meetings with their LLM-extracted agenda items, topic/neighborhood/district badges. Data flows: scraper → Supabase → RSC → browser.
 
 | M  | Goal                                              | State |
 | -- | ------------------------------------------------- | ----- |
@@ -24,7 +24,7 @@ This is a learning project. The plan and milestones live at
 | M2 | Planning Commission scraper end-to-end (no LLM)   | ✅    |
 | M3 | LLM extraction with Claude Haiku 4.5              | ✅    |
 | M4 | BOS + hearings sources                            | ⬜    |
-| M5 | Frontend list page                                | ⬜    |
+| M5 | Frontend list page                                | ✅    |
 | M6 | Filters & search                                  | ⬜    |
 | M7 | Detail pages + about                              | ⬜    |
 | M8 | GitHub Actions cron                               | ⬜    |
