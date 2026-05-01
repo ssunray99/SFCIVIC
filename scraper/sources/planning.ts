@@ -5,7 +5,7 @@ import { uploadRaw } from '../lib/storage.ts';
 import { createAdminClient } from '@/lib/supabase/admin.ts';
 
 const SOURCE_ID = 'planning';
-const HEARINGS_URL = 'https://sfplanning.org/hearings-commission';
+const HEARINGS_URL = 'https://sfplanning.org/hearings-cpc';
 
 export async function scrape(): Promise<void> {
   const supabase = createAdminClient();
