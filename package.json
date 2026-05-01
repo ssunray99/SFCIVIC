@@ -12,6 +12,7 @@
     "scrape:planning": "tsx --env-file=.env.local scraper/run.ts planning",
     "scrape:bos": "tsx --env-file=.env.local scraper/run.ts bos",
     "scrape:hearings": "tsx --env-file=.env.local scraper/run.ts hearings",
+    "extract": "tsx --env-file=.env.local scraper/run.ts extract",
     "db:types": "supabase gen types typescript --linked > src/lib/database.types.ts",
     "db:push": "supabase db push",
     "supabase": "supabase"

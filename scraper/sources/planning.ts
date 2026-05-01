@@ -2,6 +2,7 @@ import { newContext, fetchBytes } from '../lib/playwright.ts';
 import { sha256 } from '../lib/hash.ts';
 import { extractPdfText } from '../lib/pdf.ts';
 import { uploadRaw } from '../lib/storage.ts';
+import { extractAgendaItems, htmlToText } from '../lib/llm.ts';
 import { createAdminClient } from '@/lib/supabase/admin.ts';
 
 const SOURCE_ID = 'planning';
@@ -143,7 +144,7 @@ export async function scrape(): Promise<void> {
         continue;
       }
 
-      // Extract text for later LLM use
+      // Extract plain text for LLM
       let agendaText = '';
       let needsOcr = false;
       if (mime === 'application/pdf') {
@@ -152,10 +153,8 @@ export async function scrape(): Promise<void> {
         needsOcr = result.needsOcr;
         if (needsOcr) console.warn(`[planning] PDF likely scanned (needs OCR): ${sourceUrl}`);
       } else {
-        agendaText = await page.evaluate(() => document.body.innerText);
+        agendaText = htmlToText(bytes.toString('utf8'));
       }
-      // agendaText stored for LLM in M3; unused here
-      void agendaText;
 
       // Upload to Storage
       let rawStoragePath: string | null = null;
@@ -190,6 +189,19 @@ export async function scrape(): Promise<void> {
 
       itemsNew++;
       console.log(`[planning] ✓ stored: ${title} (${date})`);
+
+      // LLM extraction — runs immediately after storing the meeting
+      const meetingId = await supabase
+        .from('meetings')
+        .select('id')
+        .eq('source_id', SOURCE_ID)
+        .eq('content_hash', contentHash)
+        .single()
+        .then(({ data }) => data?.id ?? null);
+
+      if (meetingId && !needsOcr) {
+        await runLlmExtraction(supabase, meetingId, `SF Planning Commission — ${title}`, agendaText);
+      }
     }
 
     await ctx.close();
@@ -212,5 +224,101 @@ export async function scrape(): Promise<void> {
       .update({ status: 'error', finished_at: new Date().toISOString(), error: msg })
       .eq('id', runId);
     throw err;
+  }
+}
+
+/**
+ * Re-run LLM extraction on all Planning Commission meetings that have no
+ * agenda_items yet and aren't flagged needs_ocr.
+ * Called by `npm run scrape:planning extract` or `npm run extract`.
+ */
+export async function extractExisting(): Promise<void> {
+  const supabase = createAdminClient();
+
+  const { data: meetings, error } = await supabase
+    .from('meetings')
+    .select('id, title, raw_storage_path, needs_ocr')
+    .eq('source_id', SOURCE_ID)
+    .eq('needs_ocr', false);
+
+  if (error) throw error;
+
+  // Filter to meetings with no agenda_items
+  const unprocessed: typeof meetings = [];
+  for (const m of meetings ?? []) {
+    const { count } = await supabase
+      .from('agenda_items')
+      .select('id', { count: 'exact', head: true })
+      .eq('meeting_id', m.id);
+    if ((count ?? 0) === 0) unprocessed.push(m);
+  }
+
+  console.log(`[planning:extract] ${unprocessed.length} meeting(s) to process`);
+
+  for (const meeting of unprocessed) {
+    if (!meeting.raw_storage_path) {
+      console.log(`[planning:extract] no storage path for ${meeting.id}, skipping`);
+      continue;
+    }
+
+    // Download raw bytes from Storage
+    const { data: fileData, error: dlErr } = await supabase.storage
+      .from('raw')
+      .download(meeting.raw_storage_path);
+
+    if (dlErr || !fileData) {
+      console.warn(`[planning:extract] download failed for ${meeting.id}:`, dlErr?.message);
+      continue;
+    }
+
+    const bytes = Buffer.from(await fileData.arrayBuffer());
+    const isHtml = meeting.raw_storage_path.endsWith('.html');
+    const agendaText = isHtml
+      ? htmlToText(bytes.toString('utf8'))
+      : (await extractPdfText(bytes)).text;
+
+    await runLlmExtraction(supabase, meeting.id, meeting.title, agendaText);
+  }
+
+  console.log(`[planning:extract] done`);
+}
+
+// --- shared helper ---
+
+type SupabaseClient = ReturnType<typeof createAdminClient>;
+
+async function runLlmExtraction(
+  supabase: SupabaseClient,
+  meetingId: string,
+  meetingTitle: string,
+  agendaText: string,
+): Promise<void> {
+  console.log(`[llm] extracting items for meeting ${meetingId}`);
+  const { items, promptVersion, model } = await extractAgendaItems(agendaText, meetingTitle);
+
+  if (items.length === 0) {
+    console.log(`[llm] no items extracted for ${meetingId}`);
+    return;
+  }
+
+  const rows = items.map((item) => ({
+    meeting_id: meetingId,
+    position: item.position ?? null,
+    title: item.title,
+    summary: item.summary,
+    item_type: item.item_type,
+    district: item.district ?? null,
+    neighborhoods: item.neighborhoods,
+    topics: item.topics,
+    llm_model: model,
+    prompt_version: promptVersion,
+    llm_extracted_at: new Date().toISOString(),
+  }));
+
+  const { error } = await supabase.from('agenda_items').insert(rows);
+  if (error) {
+    console.error(`[llm] insert failed for ${meetingId}:`, error.message);
+  } else {
+    console.log(`[llm] ✓ inserted ${rows.length} agenda item(s) for ${meetingId}`);
   }
 }

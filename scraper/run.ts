@@ -1,9 +1,10 @@
-import { scrape as scrapePlanning } from './sources/planning.ts';
+import { scrape as scrapePlanning, extractExisting as extractPlanning } from './sources/planning.ts';
 import { closeBrowser } from './lib/playwright.ts';
 
-// Accept an optional source filter as the first CLI arg:
-//   tsx scraper/run.ts            → run all sources
-//   tsx scraper/run.ts planning   → run only Planning Commission
+// CLI usage:
+//   tsx scraper/run.ts                → scrape all sources
+//   tsx scraper/run.ts planning       → scrape Planning Commission only
+//   tsx scraper/run.ts extract        → run LLM extraction on unprocessed meetings
 const filter = process.argv[2]?.toLowerCase();
 
 const sources: Array<{ id: string; fn: () => Promise<void> }> = [
@@ -11,20 +12,27 @@ const sources: Array<{ id: string; fn: () => Promise<void> }> = [
   // bos and hearings added in M4
 ];
 
-const toRun = filter ? sources.filter((s) => s.id === filter) : sources;
-
-if (toRun.length === 0) {
-  console.error(`Unknown source: "${filter}". Available: ${sources.map((s) => s.id).join(', ')}`);
-  process.exit(1);
-}
-
 async function main() {
+  // Special command: re-run LLM extraction on all stored meetings
+  if (filter === 'extract') {
+    console.log('\n=== LLM extraction pass ===');
+    await extractPlanning();
+    console.log('\nAll done.');
+    return;
+  }
+
+  const toRun = filter ? sources.filter((s) => s.id === filter) : sources;
+
+  if (toRun.length === 0) {
+    console.error(`Unknown source: "${filter}". Available: ${sources.map((s) => s.id).join(', ')}, extract`);
+    process.exit(1);
+  }
+
   for (const { id, fn } of toRun) {
     console.log(`\n=== scraping: ${id} ===`);
     try {
       await fn();
     } catch (err) {
-      // Log and continue — one failing source must not block the others
       console.error(`[${id}] FAILED:`, err instanceof Error ? err.message : err);
     }
   }
