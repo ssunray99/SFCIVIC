@@ -137,14 +137,21 @@ export async function scrape(): Promise<void> {
         totalPdfsLinked += r.pdfsLinked;
       }
 
-      // Fall back to event-page text if we found neither section, or if all
-      // linked PDFs failed to yield text (likely scanned).
+      // Fall back to event-page text if we found neither section.
       if (!agendaText.trim()) {
         agendaText = htmlToText(eventHtml);
       }
-      if (totalPdfsLinked > 0 && !usedAnyPdf) needsOcr = true;
 
       agendaText = agendaText.slice(0, MAX_TEXT_TOTAL);
+
+      // Only skip LLM if there is truly nothing useful to send — i.e. the
+      // final text is shorter than the minimum the LLM requires (200 chars).
+      // PDF parse failures alone are not enough reason to block: the packet
+      // HTML often has case titles and descriptions worth extracting.
+      if (!usedAnyPdf && totalPdfsLinked > 0) {
+        console.warn(`[planning] all ${totalPdfsLinked} PDF(s) failed to parse — LLM will use HTML text only`);
+      }
+      needsOcr = agendaText.trim().length < 200;
 
       // Store the event page HTML as the canonical raw artefact. It is the
       // single stable URL for a meeting and contains links to every PDF.
