@@ -1,0 +1,46 @@
+{
+  "name": "sfcivic",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "scrape": "tsx --env-file=.env.local scraper/run.ts",
+    "scrape:planning": "tsx --env-file=.env.local scraper/run.ts planning",
+    "scrape:bos": "tsx --env-file=.env.local scraper/run.ts bos",
+    "scrape:hearings": "tsx --env-file=.env.local scraper/run.ts hearings",
+    "db:types": "supabase gen types typescript --linked > src/lib/database.types.ts",
+    "db:push": "supabase db push"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.92.0",
+    "@supabase/ssr": "^0.10.2",
+    "@supabase/supabase-js": "^2.105.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.14.0",
+    "next": "16.2.4",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "tailwind-merge": "^3.5.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/pdf-parse": "^1.1.5",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "dotenv": "^17.4.2",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.4",
+    "p-retry": "^8.0.0",
+    "pdf-parse": "^2.4.5",
+    "playwright": "^1.59.1",
+    "tailwindcss": "^4",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}
