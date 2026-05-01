@@ -18,15 +18,22 @@ if (toRun.length === 0) {
   process.exit(1);
 }
 
-for (const { id, fn } of toRun) {
-  console.log(`\n=== scraping: ${id} ===`);
-  try {
-    await fn();
-  } catch (err) {
-    // Log and continue — one failing source must not block the others
-    console.error(`[${id}] FAILED:`, err instanceof Error ? err.message : err);
+async function main() {
+  for (const { id, fn } of toRun) {
+    console.log(`\n=== scraping: ${id} ===`);
+    try {
+      await fn();
+    } catch (err) {
+      // Log and continue — one failing source must not block the others
+      console.error(`[${id}] FAILED:`, err instanceof Error ? err.message : err);
+    }
   }
+
+  await closeBrowser();
+  console.log('\nAll done.');
 }
 
-await closeBrowser();
-console.log('\nAll done.');
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
