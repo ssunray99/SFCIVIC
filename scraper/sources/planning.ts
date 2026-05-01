@@ -54,8 +54,8 @@ export async function scrape(): Promise<void> {
 
     console.log(`[planning] found ${agendaLinks.length} agenda link(s)`);
 
-    // If we got nothing, dump diagnostics so we can refine the selector
-    if (agendaLinks.length === 0) {
+    // Always dump all anchors for now so we can see the full page structure
+    if (true || agendaLinks.length === 0) {
       const debugDir = 'scraper/.debug';
       const fs = await import('node:fs/promises');
       await fs.mkdir(debugDir, { recursive: true });
@@ -63,8 +63,8 @@ export async function scrape(): Promise<void> {
       await fs.writeFile(`${debugDir}/planning.html`, html);
       await page.screenshot({ path: `${debugDir}/planning.png`, fullPage: true });
       console.warn(`[planning] no agenda links found. Wrote ${debugDir}/planning.html and planning.png`);
-      console.warn(`[planning] first 20 anchor samples:`);
-      for (const a of allAnchors.slice(0, 20)) {
+      console.warn(`[planning] all ${allAnchors.length} anchor samples:`);
+      for (const a of allAnchors) {
         console.warn(`  - ${a.href} :: "${a.text.slice(0, 60)}"`);
       }
     }
