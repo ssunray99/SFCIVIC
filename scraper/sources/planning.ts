@@ -27,37 +27,47 @@ export async function scrape(): Promise<void> {
     const page = await ctx.newPage();
 
     console.log(`[planning] navigating to ${HEARINGS_URL}`);
-    await page.goto(HEARINGS_URL, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await page.goto(HEARINGS_URL, { waitUntil: 'networkidle', timeout: 45_000 });
 
-    // SF Planning typically renders hearing rows as <tr> elements with a date
-    // and an "Agenda" link. We look for any <a> whose href ends in .pdf or
-    // whose text includes "agenda" (case-insensitive).
-    const agendaLinks = await page.evaluate(() => {
+    const allAnchors = await page.evaluate(() => {
       const anchors = Array.from(document.querySelectorAll('a[href]'));
-      return anchors
-        .filter((a) => {
-          const href = (a as HTMLAnchorElement).href.toLowerCase();
-          const text = a.textContent?.toLowerCase() ?? '';
-          return (
-            href.endsWith('.pdf') ||
-            href.includes('/agenda') ||
-            text.includes('agenda')
-          );
-        })
-        .map((a) => ({
-          href: (a as HTMLAnchorElement).href,
-          text: a.textContent?.trim() ?? '',
-          // Walk up to a <tr> or <li> to get adjacent date text
-          rowText: (
-            a.closest('tr') ??
-            a.closest('li') ??
-            a.closest('div') ??
-            a.parentElement
-          )?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
-        }));
+      return anchors.map((a) => ({
+        href: (a as HTMLAnchorElement).href,
+        text: a.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+        rowText: (
+          a.closest('tr') ??
+          a.closest('li') ??
+          a.closest('article') ??
+          a.closest('div') ??
+          a.parentElement
+        )?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+      }));
+    });
+
+    console.log(`[planning] page has ${allAnchors.length} total anchors`);
+
+    const agendaLinks = allAnchors.filter(({ href, text }) => {
+      const h = href.toLowerCase();
+      const t = text.toLowerCase();
+      return h.endsWith('.pdf') || h.includes('/agenda') || t.includes('agenda');
     });
 
     console.log(`[planning] found ${agendaLinks.length} agenda link(s)`);
+
+    // If we got nothing, dump diagnostics so we can refine the selector
+    if (agendaLinks.length === 0) {
+      const debugDir = 'scraper/.debug';
+      const fs = await import('node:fs/promises');
+      await fs.mkdir(debugDir, { recursive: true });
+      const html = await page.content();
+      await fs.writeFile(`${debugDir}/planning.html`, html);
+      await page.screenshot({ path: `${debugDir}/planning.png`, fullPage: true });
+      console.warn(`[planning] no agenda links found. Wrote ${debugDir}/planning.html and planning.png`);
+      console.warn(`[planning] first 20 anchor samples:`);
+      for (const a of allAnchors.slice(0, 20)) {
+        console.warn(`  - ${a.href} :: "${a.text.slice(0, 60)}"`);
+      }
+    }
 
     for (const link of agendaLinks) {
       const url = link.href;
