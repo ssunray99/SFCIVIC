@@ -13,7 +13,8 @@
     "scrape:bos": "tsx --env-file=.env.local scraper/run.ts bos",
     "scrape:hearings": "tsx --env-file=.env.local scraper/run.ts hearings",
     "db:types": "supabase gen types typescript --linked > src/lib/database.types.ts",
-    "db:push": "supabase db push"
+    "db:push": "supabase db push",
+    "supabase": "supabase"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.92.0",
@@ -39,6 +40,7 @@
     "p-retry": "^8.0.0",
     "pdf-parse": "^2.4.5",
     "playwright": "^1.59.1",
+    "supabase": "^2.98.0",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"

@@ -53,13 +53,26 @@ scraper or in `.env.local`. Never commit it. Never put it in Vercel.
 
 ### 2. Install the Supabase CLI
 
-```bash
-brew install supabase/tap/supabase     # macOS
-# or see https://supabase.com/docs/guides/cli for other platforms
+The CLI is already a devDependency in this repo, so once you've run
+`npm install` (step 7 below) it's available via `npx`. Use that on **Windows,
+macOS, or Linux** — no per-OS package manager needed:
 
-supabase login
-supabase link --project-ref <your-project-ref>   # found in the project URL
+```bash
+npx supabase login
+npx supabase link --project-ref <your-project-ref>   # ref is in the project URL
 ```
+
+> The `<project-ref>` is the random-looking string in your project URL —
+> e.g. for `https://abcdefghijklmnop.supabase.co` the ref is
+> `abcdefghijklmnop`.
+
+If you'd rather install the CLI globally (optional):
+
+- **Windows** — `scoop bucket add supabase https://github.com/supabase/scoop-bucket.git && scoop install supabase` (requires [Scoop](https://scoop.sh))
+- **macOS** — `brew install supabase/tap/supabase`
+- **Linux** — see <https://supabase.com/docs/guides/cli>
+
+With a global install you can drop the `npx` prefix.
 
 ### 3. Apply the schema
 
@@ -67,11 +80,14 @@ supabase link --project-ref <your-project-ref>   # found in the project URL
 npm run db:push                        # applies supabase/migrations/0001_init.sql
 ```
 
-Then paste the contents of `supabase/seed.sql` into the SQL Editor (or run it
-via the CLI) to populate the three source rows.
+Then run `supabase/seed.sql` to populate the three source rows. Easiest way:
+open the **SQL Editor** in the Supabase dashboard, paste the file's contents,
+and click *Run*. (The CLI's `db reset` would also work but wipes your data,
+which is overkill here.)
 
 Create a Storage bucket named **`raw`** (public read) — used for archival HTML
-and PDFs. From the dashboard: Storage → New bucket → name `raw` → Public.
+and PDFs. From the dashboard: Storage → New bucket → name `raw` → toggle
+*Public bucket* on → Save.
 
 ### 4. Generate TypeScript types from your schema
 
@@ -86,9 +102,18 @@ Sign up at <https://console.anthropic.com>, create a key, save it to
 
 ### 6. Local environment
 
+Copy `.env.example` to `.env.local`, then fill in the values from steps 1
+and 5.
+
 ```bash
+# macOS / Linux / Git Bash on Windows
 cp .env.example .env.local
-# then fill in the values from steps 1 and 5
+
+# Windows PowerShell
+Copy-Item .env.example .env.local
+
+# Windows Command Prompt
+copy .env.example .env.local
 ```
 
 ### 7. Install deps and run the dev server
@@ -98,7 +123,9 @@ npm install
 npm run dev
 ```
 
-Visit <http://localhost:3000>.
+Visit <http://localhost:3000>. On Windows, use **PowerShell** or **Git Bash**
+— the commands in this README are bash-flavored but `npm`/`npx` work the same
+in PowerShell.
 
 ---
 
