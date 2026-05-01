@@ -5,12 +5,12 @@ import { uploadRaw } from '../lib/storage.ts';
 import { createAdminClient } from '@/lib/supabase/admin.ts';
 
 const SOURCE_ID = 'planning';
-const HEARINGS_URL = 'https://sfplanning.org/hearings-cpc';
+const GRID_URL = 'https://sfplanning.org/hearings-cpc-grid';
+const BASE_URL = 'https://sfplanning.org';
 
 export async function scrape(): Promise<void> {
   const supabase = createAdminClient();
 
-  // --- log scrape start ---
   const { data: run, error: runErr } = await supabase
     .from('scrape_runs')
     .insert({ source_id: SOURCE_ID, status: 'running' })
@@ -26,67 +26,111 @@ export async function scrape(): Promise<void> {
     const ctx = await newContext();
     const page = await ctx.newPage();
 
-    console.log(`[planning] navigating to ${HEARINGS_URL}`);
-    await page.goto(HEARINGS_URL, { waitUntil: 'networkidle', timeout: 45_000 });
+    // Collect event URLs from all pages of the grid
+    const eventUrls = new Set<string>();
+    let pageNum = 0;
+    while (true) {
+      const url = pageNum === 0 ? GRID_URL : `${GRID_URL}?page=${pageNum}`;
+      console.log(`[planning] fetching grid page ${pageNum + 1}: ${url}`);
+      await page.goto(url, { waitUntil: 'networkidle', timeout: 45_000 });
 
-    const allAnchors = await page.evaluate(() => {
-      const anchors = Array.from(document.querySelectorAll('a[href]'));
-      return anchors.map((a) => ({
-        href: (a as HTMLAnchorElement).href,
-        text: a.textContent?.replace(/\s+/g, ' ').trim() ?? '',
-        rowText: (
-          a.closest('tr') ??
-          a.closest('li') ??
-          a.closest('article') ??
-          a.closest('div') ??
-          a.parentElement
-        )?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
-      }));
-    });
+      const hrefs = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('a[href]'))
+          .map((a) => (a as HTMLAnchorElement).href)
+          .filter((h) => h.includes('/event/planning-commission'))
+      );
 
-    console.log(`[planning] page has ${allAnchors.length} total anchors`);
+      const before = eventUrls.size;
+      for (const h of hrefs) eventUrls.add(h);
+      const added = eventUrls.size - before;
+      console.log(`[planning] grid page ${pageNum + 1}: ${added} new event(s) (${eventUrls.size} total)`);
 
-    const agendaLinks = allAnchors.filter(({ href, text }) => {
-      const h = href.toLowerCase();
-      const t = text.toLowerCase();
-      return h.endsWith('.pdf') || h.includes('/agenda') || t.includes('agenda');
-    });
+      // Stop if this page added nothing new (reached the end)
+      if (added === 0) break;
 
-    console.log(`[planning] found ${agendaLinks.length} agenda link(s)`);
-
-    // Always dump all anchors for now so we can see the full page structure
-    if (true || agendaLinks.length === 0) {
-      const debugDir = 'scraper/.debug';
-      const fs = await import('node:fs/promises');
-      await fs.mkdir(debugDir, { recursive: true });
-      const html = await page.content();
-      await fs.writeFile(`${debugDir}/planning.html`, html);
-      await page.screenshot({ path: `${debugDir}/planning.png`, fullPage: true });
-      console.warn(`[planning] no agenda links found. Wrote ${debugDir}/planning.html and planning.png`);
-      console.warn(`[planning] all ${allAnchors.length} anchor samples:`);
-      for (const a of allAnchors) {
-        console.warn(`  - ${a.href} :: "${a.text.slice(0, 60)}"`);
-      }
+      // Check if there's a next page
+      const hasNext = await page.$('a[title="Go to next page"], a:has-text("Next page")');
+      if (!hasNext) break;
+      pageNum++;
     }
 
-    for (const link of agendaLinks) {
-      const url = link.href;
-      console.log(`[planning] fetching ${url}`);
+    console.log(`[planning] found ${eventUrls.size} hearing event(s) across all pages`);
 
+    // Visit each event page to get the date, title, and agenda PDF
+    for (const eventUrl of eventUrls) {
+      itemsFound++;
+      console.log(`[planning] visiting event: ${eventUrl}`);
+
+      await page.goto(eventUrl, { waitUntil: 'networkidle', timeout: 30_000 });
+
+      // Extract meeting date from the page
+      const meetingDate = await page.evaluate((): string | null => {
+        // SF Planning event pages typically have a date in a <time> element or
+        // a field labelled "Date" / "When"
+        const time = document.querySelector('time[datetime]');
+        if (time) {
+          const dt = (time as HTMLTimeElement).dateTime;
+          if (dt) return dt.slice(0, 10);
+        }
+        // Fallback: look for a date string in the page text
+        const body = document.body.innerText;
+        const m = body.match(
+          /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i
+        );
+        if (m) {
+          const d = new Date(m[0]);
+          if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+        }
+        return null;
+      });
+
+      // Get title
+      const title = await page.evaluate((): string => {
+        return (
+          document.querySelector('h1')?.textContent?.replace(/\s+/g, ' ').trim() ??
+          'SF Planning Commission Hearing'
+        );
+      });
+
+      // Look for a PDF agenda link on the event page
+      const pdfUrl = await page.evaluate((base: string): string | null => {
+        const anchors = Array.from(document.querySelectorAll('a[href]'));
+        for (const a of anchors) {
+          const href = (a as HTMLAnchorElement).href.toLowerCase();
+          const text = a.textContent?.toLowerCase() ?? '';
+          if (href.endsWith('.pdf') || (href.includes(base) && text.includes('agenda'))) {
+            return (a as HTMLAnchorElement).href;
+          }
+        }
+        return null;
+      }, BASE_URL);
+
+      // Decide what to store: PDF if found, otherwise the event page HTML
       let bytes: Buffer;
       let mime: 'text/html' | 'application/pdf';
+      let sourceUrl: string;
 
-      try {
-        ({ bytes, mime } = await fetchBytes(url));
-      } catch (err) {
-        console.warn(`[planning] fetch failed: ${url}`, err);
-        continue;
+      if (pdfUrl) {
+        console.log(`[planning] downloading agenda PDF: ${pdfUrl}`);
+        try {
+          ({ bytes, mime } = await fetchBytes(pdfUrl));
+          sourceUrl = pdfUrl;
+        } catch (err) {
+          console.warn(`[planning] PDF fetch failed, falling back to HTML:`, err);
+          bytes = Buffer.from(await page.content());
+          mime = 'text/html';
+          sourceUrl = eventUrl;
+        }
+      } else {
+        console.log(`[planning] no PDF found — storing event page HTML`);
+        bytes = Buffer.from(await page.content());
+        mime = 'text/html';
+        sourceUrl = eventUrl;
       }
 
       const contentHash = sha256(bytes);
-      itemsFound++;
 
-      // Idempotency: skip if we've already stored this exact content
+      // Idempotency check
       const { data: existing } = await supabase
         .from('meetings')
         .select('id')
@@ -95,7 +139,7 @@ export async function scrape(): Promise<void> {
         .maybeSingle();
 
       if (existing) {
-        console.log(`[planning] already stored (hash match), skipping`);
+        console.log(`[planning] already stored, skipping`);
         continue;
       }
 
@@ -103,38 +147,39 @@ export async function scrape(): Promise<void> {
       let agendaText = '';
       let needsOcr = false;
       if (mime === 'application/pdf') {
-        ({ text: agendaText, needsOcr } = await extractPdfText(bytes));
-        if (needsOcr) {
-          console.warn(`[planning] PDF text too short — likely scanned: ${url}`);
-        }
+        const result = await extractPdfText(bytes);
+        agendaText = result.text;
+        needsOcr = result.needsOcr;
+        if (needsOcr) console.warn(`[planning] PDF likely scanned (needs OCR): ${sourceUrl}`);
       } else {
-        agendaText = bytes.toString('utf8');
+        agendaText = await page.evaluate(() => document.body.innerText);
       }
+      // agendaText stored for LLM in M3; unused here
+      void agendaText;
 
-      // Upload raw bytes to Supabase Storage
+      // Upload to Storage
       let rawStoragePath: string | null = null;
       try {
         rawStoragePath = await uploadRaw({ sourceId: SOURCE_ID, contentHash, bytes, mime });
       } catch (err) {
-        console.warn(`[planning] storage upload failed, continuing anyway:`, err);
+        console.warn(`[planning] storage upload failed, continuing:`, err);
       }
 
-      // Parse a date from the row text or URL (best-effort)
-      const meetingDate = parseDateFromText(link.rowText) ?? parseDateFromUrl(url) ?? new Date().toISOString().slice(0, 10);
-      const title = buildTitle(link.rowText, meetingDate);
+      const date = meetingDate ?? new Date().toISOString().slice(0, 10);
+      const externalId = eventUrl.split('/').pop() ?? null;
 
       const { error: insertErr } = await supabase.from('meetings').insert({
         source_id: SOURCE_ID,
-        title,
-        meeting_date: meetingDate,
-        agenda_url: url,
+        external_id: externalId,
+        title: `SF Planning Commission — ${title}`,
+        meeting_date: date,
+        agenda_url: sourceUrl,
         raw_storage_path: rawStoragePath,
         content_hash: contentHash,
         needs_ocr: needsOcr,
       });
 
       if (insertErr) {
-        // unique constraint violation = race condition, not a real error
         if (insertErr.code === '23505') {
           console.log(`[planning] duplicate insert skipped`);
         } else {
@@ -144,14 +189,19 @@ export async function scrape(): Promise<void> {
       }
 
       itemsNew++;
-      console.log(`[planning] ✓ stored: ${title} (${meetingDate})`);
+      console.log(`[planning] ✓ stored: ${title} (${date})`);
     }
 
     await ctx.close();
 
     await supabase
       .from('scrape_runs')
-      .update({ status: 'success', finished_at: new Date().toISOString(), items_found: itemsFound, items_new: itemsNew })
+      .update({
+        status: 'success',
+        finished_at: new Date().toISOString(),
+        items_found: itemsFound,
+        items_new: itemsNew,
+      })
       .eq('id', runId);
 
     console.log(`[planning] done — ${itemsNew} new / ${itemsFound} found`);
@@ -163,35 +213,4 @@ export async function scrape(): Promise<void> {
       .eq('id', runId);
     throw err;
   }
-}
-
-// --- helpers ---
-
-function parseDateFromText(text: string): string | null {
-  // Matches patterns like "May 1, 2026", "January 15, 2026", "2026-01-15"
-  const patterns = [
-    /\b(\d{4}-\d{2}-\d{2})\b/,
-    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
-  ];
-  for (const pat of patterns) {
-    const m = text.match(pat);
-    if (m) {
-      const d = new Date(m[0]);
-      if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-    }
-  }
-  return null;
-}
-
-function parseDateFromUrl(url: string): string | null {
-  const m = url.match(/(\d{4})[-_]?(\d{2})[-_]?(\d{2})/);
-  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
-  return null;
-}
-
-function buildTitle(rowText: string, date: string): string {
-  // Use the first meaningful chunk of the row text, falling back to a generic title
-  const clean = rowText.replace(/\s+/g, ' ').trim();
-  if (clean.length > 10 && clean.length < 200) return `SF Planning Commission Hearing — ${clean.slice(0, 100)}`;
-  return `SF Planning Commission Hearing — ${date}`;
 }
