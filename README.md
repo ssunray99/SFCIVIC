@@ -16,13 +16,12 @@ This is a learning project. The plan and milestones live at
 
 ## Status
 
-**Milestone 1 — scaffolding (in progress).** Next.js + Supabase clients +
-schema migration are in place. No real data yet.
+**Milestone 2 complete.** 36 Planning Commission meetings scraped and stored in Supabase. LLM extraction next.
 
 | M  | Goal                                              | State |
 | -- | ------------------------------------------------- | ----- |
-| M1 | Skeleton, schema, shadcn walkthrough              | 🟡    |
-| M2 | Planning Commission scraper end-to-end (no LLM)   | ⬜    |
+| M1 | Skeleton, schema, shadcn walkthrough              | ✅    |
+| M2 | Planning Commission scraper end-to-end (no LLM)   | ✅    |
 | M3 | LLM extraction with Claude Haiku 4.5              | ⬜    |
 | M4 | BOS + hearings sources                            | ⬜    |
 | M5 | Frontend list page                                | ⬜    |
