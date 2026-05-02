@@ -60,6 +60,10 @@ jobs:
       # We write the file here from Actions secrets rather than changing the npm
       # script, so local dev behaviour is unchanged.
       #
+      # TODO: test that all three secrets are set before this workflow runs in prod.
+      #   Trigger a manual run via Actions → Run workflow and confirm the scraper
+      #   connects to Supabase and calls the Anthropic API without auth errors.
+      #
       # Required secrets (set in repo Settings → Secrets → Actions):
       #   SUPABASE_URL            — project URL (https://xxx.supabase.co)
       #   SUPABASE_SERVICE_ROLE_KEY — service-role key (bypasses RLS; keep private)
