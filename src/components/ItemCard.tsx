@@ -92,19 +92,26 @@ export function ItemCard({
         <p className="text-sm text-zinc-600 dark:text-zinc-400">{item.summary}</p>
       )}
 
-      {(item.district != null || item.neighborhoods.length > 0 || item.topics.length > 0) && (
-        <div className="mt-1 flex flex-wrap gap-1.5">
-          {item.district != null && (
-            <Badge variant="district">District {item.district}</Badge>
-          )}
-          {item.neighborhoods.map((n) => (
-            <Badge key={n} variant="neighborhood">{n}</Badge>
-          ))}
-          {item.topics.map((t) => (
-            <Badge key={t} variant="topic">{t}</Badge>
-          ))}
-        </div>
-      )}
+      {(() => {
+        const isCitywide = item.district == null && item.neighborhoods.length === 0;
+        if (!isCitywide && item.district == null && item.neighborhoods.length === 0 && item.topics.length === 0) {
+          return null;
+        }
+        return (
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {isCitywide && <Badge variant="muted">Citywide</Badge>}
+            {item.district != null && (
+              <Badge variant="district">District {item.district}</Badge>
+            )}
+            {item.neighborhoods.map((n) => (
+              <Badge key={n} variant="neighborhood">{n}</Badge>
+            ))}
+            {item.topics.map((t) => (
+              <Badge key={t} variant="topic">{t}</Badge>
+            ))}
+          </div>
+        );
+      })()}
 
       <ActionCTA item={item} meetingUpcoming={meetingUpcoming} />
     </article>

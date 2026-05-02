@@ -66,15 +66,22 @@ function parseFilters(raw: Record<string, string | string[] | undefined>): Filte
   };
 }
 
+// An item is "citywide" when the LLM gave it no specific geography:
+// no neighborhoods AND no district. Citywide items also affect every
+// neighborhood/district, so they pass any geographic filter.
+function isCitywide(i: MeetingCardData['agenda_items'][number]): boolean {
+  return i.district === null && i.neighborhoods.length === 0;
+}
+
 function applyItemFilters(meetings: MeetingCardData[], filters: Filters): MeetingCardData[] {
   const { neighborhood, topic, district } = filters;
   if (!neighborhood && !topic && district === undefined) return meetings;
 
   return meetings.filter((m) => {
     const items = m.agenda_items;
-    if (neighborhood && !items.some((i) => i.neighborhoods.includes(neighborhood))) return false;
+    if (neighborhood && !items.some((i) => i.neighborhoods.includes(neighborhood) || isCitywide(i))) return false;
     if (topic && !items.some((i) => i.topics.includes(topic))) return false;
-    if (district !== undefined && !items.some((i) => i.district === district)) return false;
+    if (district !== undefined && !items.some((i) => i.district === district || isCitywide(i))) return false;
     return true;
   });
 }
