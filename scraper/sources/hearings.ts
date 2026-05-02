@@ -94,7 +94,7 @@ export async function scrape(): Promise<void> {
           const parent = a.closest('li, tr, div, p') ?? a.parentElement;
           const context = (parent as HTMLElement | null)?.innerText ?? '';
           const hearingDate = parseDate(context);
-          const title = (a.textContent ?? '').trim() || href.split('/').pop() ?? '';
+          const title = (a.textContent ?? '').trim() || (href.split('/').pop() ?? '');
           results.push({
             title,
             hearingDate,
