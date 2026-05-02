@@ -1,29 +1,9 @@
-// pdf-parse changed its export shape between v1 (default callable) and
-// v2 ({ pdf } named export). The installed package version may differ from
-// what @types/pdf-parse describes, so probe at load time and resolve to a
-// callable function regardless of which shape is present.
+// pdf-parse v1.1.1 is pinned: it has a stable default-callable export
+// (pdfParse(buf) → { text }). v2 ships an incompatible class-based API
+// that doesn't match @types/pdf-parse, so we stay on v1.
 
-type PdfFn = (buf: Buffer) => Promise<{ text: string }>;
-
-// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any
-const _mod: any = require('pdf-parse');
-
-const pdfParse: PdfFn =
-  typeof _mod === 'function'
-    ? _mod
-    : typeof _mod?.pdf === 'function'
-      ? _mod.pdf
-      : typeof _mod?.default === 'function'
-        ? _mod.default
-        : typeof _mod?.default?.pdf === 'function'
-          ? _mod.default.pdf
-          : (() => {
-              const shape =
-                _mod && typeof _mod === 'object'
-                  ? `keys=[${Object.keys(_mod).join(', ')}]`
-                  : `typeof=${typeof _mod}`;
-              throw new Error(`pdf-parse: no callable export found (${shape})`);
-            })();
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
 
 const MIN_TEXT_LENGTH = 500;
 

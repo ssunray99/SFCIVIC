@@ -39,7 +39,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "p-retry": "^8.0.0",
-    "pdf-parse": "^2.4.5",
+    "pdf-parse": "1.1.1",
     "playwright": "^1.59.1",
     "supabase": "^2.98.0",
     "tailwindcss": "^4",
