@@ -18,7 +18,7 @@ export function FilterBar() {
       const next = new URLSearchParams(params.toString());
       if (value) next.set(key, value);
       else next.delete(key);
-      router.push(`/?${next.toString()}`);
+      router.replace(`/?${next.toString()}`);
     },
     [params, router],
   );
@@ -105,7 +105,7 @@ export function FilterBar() {
               onClick={() => update(key, '')}
               className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-medium text-sky-800 hover:bg-sky-200 dark:bg-sky-900/40 dark:text-sky-200 dark:hover:bg-sky-900/70"
             >
-              {label} <span aria-hidden>×</span>
+              {label} <span aria-hidden="true">×</span>
             </button>
           ))}
           <a href="/" className="text-xs text-zinc-500 hover:underline dark:text-zinc-400">

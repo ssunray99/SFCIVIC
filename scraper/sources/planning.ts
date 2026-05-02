@@ -323,9 +323,10 @@ export async function scrape(): Promise<void> {
       }
 
       const date = meetingDate ?? new Date().toISOString().slice(0, 10);
-      const externalId = eventUrl.split('/').pop() ?? null;
+      // Strip query string so the slug is stable regardless of UTM params etc.
+      const externalId = eventUrl.split('/').pop()?.split('?')[0] ?? null;
 
-      const { error: insertErr } = await supabase.from('meetings').insert({
+      const { data: inserted, error: insertErr } = await supabase.from('meetings').insert({
         source_id: SOURCE_ID,
         external_id: externalId,
         title: `SF Planning Commission — ${title}`,
@@ -334,7 +335,7 @@ export async function scrape(): Promise<void> {
         raw_storage_path: rawStoragePath,
         content_hash: contentHash,
         needs_ocr: needsOcr,
-      });
+      }).select('id').single();
 
       if (insertErr) {
         if (insertErr.code === '23505') {
@@ -383,14 +384,7 @@ export async function scrape(): Promise<void> {
       itemsNew++;
       console.log(`[planning] ✓ stored: ${title} (${date})`);
 
-      const meetingId = await supabase
-        .from('meetings')
-        .select('id')
-        .eq('source_id', SOURCE_ID)
-        .eq('content_hash', contentHash)
-        .single()
-        .then(({ data }) => data?.id ?? null);
-
+      const meetingId = inserted?.id ?? null;
       if (meetingId && !needsOcr) {
         await runLlmExtraction(supabase, meetingId, `SF Planning Commission — ${title}`, agendaText);
       }
