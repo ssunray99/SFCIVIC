@@ -224,41 +224,54 @@ export async function scrape(): Promise<void> {
       // Snapshot event HTML now — page navigates away when we follow links.
       const eventHtml = await page.content();
 
-      // Pull text from each linked resource. Agenda gets priority budget.
+      // Decide what to feed the LLM based on whether the meeting has happened:
+      //   Past   → AGENDA + MINUTES (what was planned + what was decided).
+      //            Skip SUPPORTING — the staff reports are bulky and largely
+      //            redundant once minutes exist.
+      //   Future → AGENDA if posted (canonical), else SUPPORTING (packet for
+      //            enrichment until the agenda PDF goes up ~6 days before).
+      const today = new Date().toISOString().slice(0, 10);
+      const isPast = !!meetingDate && meetingDate < today;
+
       let agendaText = '';
       let needsOcr = false;
       let usedAnyPdf = false;
       let totalPdfsLinked = 0;
 
-      if (sectionLinks.agenda) {
-        console.log(`[planning] agenda link: ${sectionLinks.agenda}`);
-        const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_PER_RESOURCE);
-        agendaText += r.text;
-        usedAnyPdf ||= r.pdfsWithText > 0;
-        totalPdfsLinked += r.pdfsLinked;
+      if (isPast) {
+        if (sectionLinks.agenda) {
+          console.log(`[planning] (past) agenda link: ${sectionLinks.agenda}`);
+          const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_PER_RESOURCE);
+          agendaText += r.text;
+          usedAnyPdf ||= r.pdfsWithText > 0;
+          totalPdfsLinked += r.pdfsLinked;
+        }
+        if (sectionLinks.minutes && agendaText.length < MAX_TEXT_TOTAL) {
+          console.log(`[planning] (past) minutes link: ${sectionLinks.minutes}`);
+          const remaining = MAX_TEXT_TOTAL - agendaText.length;
+          const budget = Math.min(MAX_TEXT_PER_RESOURCE, remaining);
+          const r = await gatherTextFromLink(page, sectionLinks.minutes, budget);
+          if (r.text) agendaText += `\n\n======== MINUTES ========\n\n${r.text}`;
+          usedAnyPdf ||= r.pdfsWithText > 0;
+          totalPdfsLinked += r.pdfsLinked;
+        }
+      } else {
+        if (sectionLinks.agenda) {
+          console.log(`[planning] (future) agenda link: ${sectionLinks.agenda}`);
+          const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_TOTAL);
+          agendaText += r.text;
+          usedAnyPdf ||= r.pdfsWithText > 0;
+          totalPdfsLinked += r.pdfsLinked;
+        } else if (sectionLinks.supporting) {
+          console.log(`[planning] (future) supporting link: ${sectionLinks.supporting}`);
+          const r = await gatherTextFromLink(page, sectionLinks.supporting, MAX_TEXT_TOTAL);
+          agendaText += r.text;
+          usedAnyPdf ||= r.pdfsWithText > 0;
+          totalPdfsLinked += r.pdfsLinked;
+        }
       }
 
-      if (sectionLinks.supporting && agendaText.length < MAX_TEXT_TOTAL) {
-        console.log(`[planning] supporting link: ${sectionLinks.supporting}`);
-        const remaining = MAX_TEXT_TOTAL - agendaText.length;
-        const budget = Math.min(MAX_TEXT_PER_RESOURCE, remaining);
-        const r = await gatherTextFromLink(page, sectionLinks.supporting, budget);
-        if (r.text) agendaText += `\n\n========\n\n${r.text}`;
-        usedAnyPdf ||= r.pdfsWithText > 0;
-        totalPdfsLinked += r.pdfsLinked;
-      }
-
-      if (sectionLinks.minutes && agendaText.length < MAX_TEXT_TOTAL) {
-        console.log(`[planning] minutes link: ${sectionLinks.minutes}`);
-        const remaining = MAX_TEXT_TOTAL - agendaText.length;
-        const budget = Math.min(MAX_TEXT_PER_RESOURCE, remaining);
-        const r = await gatherTextFromLink(page, sectionLinks.minutes, budget);
-        if (r.text) agendaText += `\n\n======== MINUTES ========\n\n${r.text}`;
-        usedAnyPdf ||= r.pdfsWithText > 0;
-        totalPdfsLinked += r.pdfsLinked;
-      }
-
-      // Fall back to event-page text if we found neither section.
+      // Fall back to event-page text if we found nothing usable.
       if (!agendaText.trim()) {
         agendaText = htmlToText(eventHtml);
       }
@@ -282,8 +295,6 @@ export async function scrape(): Promise<void> {
       // Pick the human-facing link shown as "Original agenda" in the UI.
       //  - Past meetings: event page (has all 3 buttons: AGENDA, SUPPORTING, MINUTES)
       //  - Future meetings: prefer AGENDA, fall back to SUPPORTING, then event page
-      const today = new Date().toISOString().slice(0, 10);
-      const isPast = !!meetingDate && meetingDate < today;
       const sourceUrl = isPast
         ? eventUrl
         : (sectionLinks.agenda ?? sectionLinks.supporting ?? eventUrl);
