@@ -4,7 +4,7 @@
 insert into sources (id, name, url) values
   ('planning', 'SF Planning Commission',     'https://sfplanning.org/hearings-cpc'),
   ('bos',      'SF Board of Supervisors',    'https://sfbos.org/meetings'),
-  ('hearings', 'SF Public Hearing Notices',  'https://sfplanning.org/notices')
+  ('hearings', 'SF Planning Legislative Notices', 'https://sfplanning.org/permit/notices-legislative-amendments')
 on conflict (id) do update set
   name = excluded.name,
   url  = excluded.url;
