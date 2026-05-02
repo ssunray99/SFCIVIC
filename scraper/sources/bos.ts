@@ -52,14 +52,10 @@ export async function scrape(): Promise<void> {
 
     const committeeUrls = await page.evaluate(
       ({ base, patterns }: { base: string; patterns: string[] }): string[] => {
-        function normalize(s: string): string {
-          return s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, ' ').trim();
-        }
-        function matches(linkText: string, pattern: string): boolean {
-          const words = normalize(pattern).split(' ');
-          const text = normalize(linkText);
-          return words.every((w) => text.includes(w));
-        }
+        const normalize = (s: string) =>
+          s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, ' ').trim();
+        const matches = (linkText: string, pattern: string) =>
+          normalize(pattern).split(' ').every((w) => normalize(linkText).includes(w));
         const found: string[] = [];
         for (const pattern of patterns) {
           const match = Array.from(document.querySelectorAll('a[href]')).find((a) =>
