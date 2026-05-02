@@ -39,6 +39,7 @@ type Filters = {
   topic: Topic | undefined;
   district: District | undefined;
   source: SourceId | undefined;
+  q: string | undefined;
 };
 
 function parseFilters(raw: Record<string, string | string[] | undefined>): Filters {
@@ -57,6 +58,7 @@ function parseFilters(raw: Record<string, string | string[] | undefined>): Filte
     topic: (TOPICS as readonly string[]).includes(topic ?? '') ? (topic as Topic) : undefined,
     district: DISTRICTS.includes(districtNum as District) ? (districtNum as District) : undefined,
     source: SOURCES.some((s) => s.id === source) ? (source as SourceId) : undefined,
+    q: str('q')?.trim() || undefined,
   };
 }
 
@@ -74,7 +76,11 @@ function applyItemFilters(meetings: MeetingCardData[], filters: Filters): Meetin
 }
 
 const hasFilters = (f: Filters) =>
-  f.neighborhood !== undefined || f.topic !== undefined || f.district !== undefined || f.source !== undefined;
+  f.neighborhood !== undefined ||
+  f.topic !== undefined ||
+  f.district !== undefined ||
+  f.source !== undefined ||
+  f.q !== undefined;
 
 async function getMeetings(filters: Filters): Promise<{
   upcoming: MeetingCardData[];
@@ -84,9 +90,24 @@ async function getMeetings(filters: Filters): Promise<{
   const today = new Date().toISOString().slice(0, 10);
   const filtered = hasFilters(filters);
 
+  // Text search: query agenda_items FTS index to get matching meeting IDs,
+  // then constrain the meetings queries to only those IDs.
+  let searchIds: string[] | null = null;
+  if (filters.q) {
+    const { data: hits, error: ftsErr } = await supabase
+      .from('agenda_items')
+      .select('meeting_id')
+      .textSearch('search_tsv', filters.q, { type: 'websearch', config: 'english' });
+    if (ftsErr) console.error('[page] FTS query failed:', ftsErr.message);
+    const ids = [...new Set((hits ?? []).map((h) => h.meeting_id as string))];
+    if (ids.length === 0) return { upcoming: [], past: [] };
+    searchIds = ids;
+  }
+
   const base = () => {
     let q = supabase.from('meetings').select(SELECT);
     if (filters.source) q = q.eq('source_id', filters.source);
+    if (searchIds) q = q.in('id', searchIds);
     return q;
   };
 
@@ -187,11 +208,16 @@ export default async function Home({
       )}
 
       <footer className="border-t border-zinc-200 pt-6 text-xs text-zinc-500 dark:border-zinc-800">
-        Unofficial. Summaries are AI-generated and may be wrong or incomplete. For
-        canonical agendas see{' '}
-        <a className="underline" href="https://sfplanning.org/hearings-commission" target="_blank" rel="noopener noreferrer">sfplanning.org</a>{' '}
-        and{' '}
-        <a className="underline" href="https://sfbos.org/meetings" target="_blank" rel="noopener noreferrer">sfbos.org</a>.
+        <div className="flex items-center justify-between">
+          <span>
+            Unofficial. Summaries are AI-generated and may be wrong or incomplete. For
+            canonical agendas see{' '}
+            <a className="underline" href="https://sfplanning.org/hearings-commission" target="_blank" rel="noopener noreferrer">sfplanning.org</a>{' '}
+            and{' '}
+            <a className="underline" href="https://sfbos.org/meetings" target="_blank" rel="noopener noreferrer">sfbos.org</a>.
+          </span>
+          <a href="/about" className="ml-4 shrink-0 underline">About</a>
+        </div>
       </footer>
     </main>
   );

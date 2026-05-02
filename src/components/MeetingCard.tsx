@@ -42,7 +42,11 @@ export function MeetingCard({ meeting }: { meeting: MeetingCardData }) {
             <Badge variant="muted">scanned PDF — not summarized</Badge>
           )}
         </div>
-        <h2 className="text-base font-semibold leading-snug">{meeting.title}</h2>
+        <h2 className="text-base font-semibold leading-snug">
+          <a href={`/meetings/${meeting.id}`} className="hover:underline">
+            {meeting.title}
+          </a>
+        </h2>
         {meeting.agenda_url && (
           <a
             href={meeting.agenda_url}
