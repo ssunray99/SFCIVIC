@@ -194,19 +194,25 @@ export async function scrape(): Promise<void> {
           'SF Planning Commission Hearing',
       );
 
-      // Find the AGENDA and SUPPORTING buttons by their visible text. Newer
-      // events only have SUPPORTING (the "hearing packet"); older events have
-      // both AGENDA (the canonical agenda doc) and SUPPORTING (staff reports).
+      // Find the AGENDA, SUPPORTING, and MINUTES buttons by their visible text.
+      // Past events expose all three. Newer events typically only have
+      // SUPPORTING until the agenda is posted ~6 days before the hearing.
       const sectionLinks = await page.evaluate((): {
         agenda: string | null;
         supporting: string | null;
+        minutes: string | null;
       } => {
-        const out = { agenda: null as string | null, supporting: null as string | null };
+        const out = {
+          agenda: null as string | null,
+          supporting: null as string | null,
+          minutes: null as string | null,
+        };
         for (const a of Array.from(document.querySelectorAll('a[href]'))) {
           const href = (a as HTMLAnchorElement).href;
           const text = (a.textContent ?? '').trim().toLowerCase();
           if (text === 'agenda' && !out.agenda) out.agenda = href;
           else if (text === 'supporting' && !out.supporting) out.supporting = href;
+          else if (text === 'minutes' && !out.minutes) out.minutes = href;
           // Fallback URL pattern for the SUPPORTING packet
           if (!out.supporting && href.includes('/resource/planning-commission-hearing-packet-')) {
             out.supporting = href;
@@ -242,6 +248,16 @@ export async function scrape(): Promise<void> {
         totalPdfsLinked += r.pdfsLinked;
       }
 
+      if (sectionLinks.minutes && agendaText.length < MAX_TEXT_TOTAL) {
+        console.log(`[planning] minutes link: ${sectionLinks.minutes}`);
+        const remaining = MAX_TEXT_TOTAL - agendaText.length;
+        const budget = Math.min(MAX_TEXT_PER_RESOURCE, remaining);
+        const r = await gatherTextFromLink(page, sectionLinks.minutes, budget);
+        if (r.text) agendaText += `\n\n======== MINUTES ========\n\n${r.text}`;
+        usedAnyPdf ||= r.pdfsWithText > 0;
+        totalPdfsLinked += r.pdfsLinked;
+      }
+
       // Fall back to event-page text if we found neither section.
       if (!agendaText.trim()) {
         agendaText = htmlToText(eventHtml);
@@ -262,7 +278,15 @@ export async function scrape(): Promise<void> {
       // single stable URL for a meeting and contains links to every PDF.
       const bytes = Buffer.from(eventHtml);
       const mime = 'text/html' as const;
-      const sourceUrl = sectionLinks.agenda ?? sectionLinks.supporting ?? eventUrl;
+
+      // Pick the human-facing link shown as "Original agenda" in the UI.
+      //  - Past meetings: event page (has all 3 buttons: AGENDA, SUPPORTING, MINUTES)
+      //  - Future meetings: prefer AGENDA, fall back to SUPPORTING, then event page
+      const today = new Date().toISOString().slice(0, 10);
+      const isPast = !!meetingDate && meetingDate < today;
+      const sourceUrl = isPast
+        ? eventUrl
+        : (sectionLinks.agenda ?? sectionLinks.supporting ?? eventUrl);
       const contentHash = sha256(bytes);
 
       if (needsOcr) console.warn(`[planning] needs OCR: ${eventUrl}`);
