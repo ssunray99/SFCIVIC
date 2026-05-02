@@ -8,6 +8,7 @@ import { createAdminClient } from '@/lib/supabase/admin.ts';
 
 const SOURCE_ID = 'planning';
 const GRID_URL = 'https://sfplanning.org/hearings-cpc-grid';
+const NOTICES_URL = 'https://sfplanning.org/permit/notices-legislative-amendments';
 // Only import meetings from this year onwards. Past years are excluded both
 // during grid pagination (stop when year disappears from the page) and when
 // inserting each event (skip if meeting_date is before Jan 1 of this year).
@@ -158,6 +159,10 @@ export async function scrape(): Promise<void> {
 
     console.log(`[planning] found ${eventUrls.size} hearing event(s) across all pages`);
 
+    // Fetch legislative amendment notices once and index them by hearing date.
+    const noticesMap = await fetchLegislativeNotices(page);
+    console.log(`[planning] fetched ${noticesMap.size} legislative notice section(s)`);
+
     for (const eventUrl of eventUrls) {
       itemsFound++;
       console.log(`[planning] visiting event: ${eventUrl}`);
@@ -274,6 +279,15 @@ export async function scrape(): Promise<void> {
       // Fall back to event-page text if we found nothing usable.
       if (!agendaText.trim()) {
         agendaText = htmlToText(eventHtml);
+      }
+
+      // Append legislative amendment notice for this date, if one exists.
+      if (meetingDate) {
+        const noticeText = noticesMap.get(meetingDate);
+        if (noticeText) {
+          console.log(`[planning] appending legislative notice for ${meetingDate}`);
+          agendaText += `\n\n======== LEGISLATIVE AMENDMENT NOTICES ========\n\n${noticeText}`;
+        }
       }
 
       agendaText = agendaText.slice(0, MAX_TEXT_TOTAL);
@@ -514,6 +528,59 @@ export async function extractExisting(): Promise<void> {
   }
 
   console.log(`[planning:extract] done`);
+}
+
+/**
+ * Fetch sfplanning.org/permit/notices-legislative-amendments and return a map
+ * of YYYY-MM-DD → notice text for each date-headed section found on the page.
+ */
+async function fetchLegislativeNotices(page: Page): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  try {
+    await page.goto(NOTICES_URL, { waitUntil: 'networkidle', timeout: 45_000 });
+
+    type RawSection = { heading: string; content: string };
+    const rawSections = await page.evaluate((): RawSection[] => {
+      const results: RawSection[] = [];
+      const headings = Array.from(
+        document.querySelectorAll('h2, h3, [class*="heading"], [class*="date"]'),
+      ).filter((el) =>
+        /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/i.test(
+          (el as HTMLElement).innerText ?? '',
+        ),
+      );
+      for (const heading of headings) {
+        const headingText = (heading as HTMLElement).innerText.replace(/\s+/g, ' ').trim();
+        let content = '';
+        let el = heading.nextElementSibling;
+        while (el) {
+          const tag = el.tagName.toUpperCase();
+          if (
+            (tag === 'H2' || tag === 'H3') &&
+            /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/i.test(
+              (el as HTMLElement).innerText ?? '',
+            )
+          ) break;
+          content += (el as HTMLElement).innerText + '\n';
+          el = el.nextElementSibling;
+        }
+        if (content.trim()) results.push({ heading: headingText, content: content.trim() });
+      }
+      return results;
+    });
+
+    for (const section of rawSections) {
+      const m = section.heading.match(
+        /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
+      );
+      if (!m) continue;
+      const date = new Date(m[0]).toISOString().slice(0, 10);
+      map.set(date, `${section.heading}\n\n${section.content}`);
+    }
+  } catch (err) {
+    console.warn('[planning] failed to fetch legislative notices, continuing without them:', err instanceof Error ? err.message : err);
+  }
+  return map;
 }
 
 type SupabaseClient = ReturnType<typeof createAdminClient>;
