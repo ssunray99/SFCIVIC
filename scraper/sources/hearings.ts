@@ -84,6 +84,29 @@ export async function scrape(): Promise<void> {
       return { rawRows, rawPdfs, pageUrl: location.href };
     });
 
+    // Temporary: log page structure to diagnose zero results
+    const debug = await page.evaluate((): {
+      rowCount: number;
+      pdfCount: number;
+      snippet: string;
+      links: Array<{ text: string; href: string }>;
+    } => ({
+      rowCount: document.querySelectorAll('table tr, .views-row, .view-row').length,
+      pdfCount: Array.from(document.querySelectorAll('a[href]')).filter((a) =>
+        (a as HTMLAnchorElement).href.toLowerCase().endsWith('.pdf'),
+      ).length,
+      snippet: document.body.innerText.slice(0, 400),
+      links: Array.from(document.querySelectorAll('a[href]')).slice(0, 30).map((a) => ({
+        text: (a.textContent ?? '').trim().slice(0, 80),
+        href: (a as HTMLAnchorElement).href,
+      })),
+    }));
+    console.log(`[hearings] page: ${pageUrl}`);
+    console.log(`[hearings] row selector matches: ${debug.rowCount}, PDF links: ${debug.pdfCount}`);
+    console.log(`[hearings] body snippet:\n${debug.snippet}`);
+    console.log(`[hearings] first 30 links:`);
+    for (const { text, href } of debug.links) console.log(`  "${text}" → ${href}`);
+
     // Parse dates in Node.js using the same helper used elsewhere.
     function parseDateFromText(text: string): string | null {
       const m = text.match(
