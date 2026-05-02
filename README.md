@@ -23,11 +23,11 @@ This is a learning project. The plan and milestones live at
 | M1 | Skeleton, schema, shadcn walkthrough              | ✅    |
 | M2 | Planning Commission scraper end-to-end (no LLM)   | ✅    |
 | M3 | LLM extraction with Claude Haiku 4.5              | ✅    |
-| M4 | BOS + hearings sources                            | 🔄    |
+| M4 | BOS + hearings sources                            | ✅    |
 | M5 | Frontend list page                                | ✅    |
 | M6 | Filters & search                                  | ✅    |
 | M7 | Detail pages + about                              | ✅    |
-| M8 | GitHub Actions cron                               | ⬜    |
+| M8 | GitHub Actions cron                               | ✅    |
 | M9 | Vercel deploy                                     | ⬜    |
 
 ---

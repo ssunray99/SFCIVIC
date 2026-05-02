@@ -21,12 +21,10 @@ jobs:
       matrix:
         source:
           - planning
-          # TODO(M4): uncomment once BOS + hearings scrapers are implemented.
-          # The scraper entry points (npm run scrape:bos / scrape:hearings) and
-          # the source rows in supabase/seed.sql already exist — they just need
-          # the scraper logic in scraper/sources/bos.ts and scraper/sources/hearings.ts.
-          # - bos
-          # - hearings
+          - bos
+          # Note: legislative notices (hearings) are folded into the planning
+          # scraper (scraper/sources/planning.ts fetchLegislativeNotices) rather
+          # than running as a separate job.
 
     steps:
       - uses: actions/checkout@v4
