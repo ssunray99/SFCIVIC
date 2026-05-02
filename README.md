@@ -23,6 +23,18 @@ Districts polygons. Per-item action fields (written-comment deadline, email,
 portal, in-person slot) are surfaced as a "Take action by {date}" CTA on
 upcoming items.
 
+**What's next.** M11 puts address search in front of users. M12 expands the
+source list significantly: a Historic Preservation Commission scraper
+(clones the Planning pattern), a **Legistar Web API client** that
+automatically lights up the Board of Supervisors + every standing committee
+(Land Use & Transportation, Budget & Finance, Rules, Public Safety, GAO,
+Joint City/School) and replaces the Playwright BOS scraper, and an SFMTA
+Board scraper. M13 adds browse-by-neighborhood / browse-by-topic pages.
+M14 layers project tracking on Legistar's `Matters` resource — each
+ordinance/resolution becomes a first-class object with sponsors, status,
+and a history timeline across committees. M15 covers analytics and
+supervisor accountability views.
+
 | M   | Goal                                                              | State |
 | --- | ----------------------------------------------------------------- | ----- |
 | M1  | Skeleton, schema, shadcn walkthrough                              | ✅    |
@@ -36,13 +48,13 @@ upcoming items.
 | M9  | Vercel deploy                                                     | ⬜    |
 | M10 | Address geocoding + implicit neighborhoods + action layer         | ✅    |
 | M11 | Address search UI (foreground for users)                          | ⬜    |
-| M12 | SFMTA Board of Directors scraper                                  | ⬜    |
+| M12 | Source expansion (HPC, Legistar API, BOS committees, SFMTA)       | ⬜    |
 | M13 | Browse-by-neighborhood / browse-by-topic pages                    | ⬜    |
-| M14 | Project / legislation tracking (linked items across meetings)     | ⬜    |
-| M15 | Analytics ("how many housing projects in District 9 this year?")  | ⬜    |
+| M14 | Project tracking on Legistar Matters                              | ⬜    |
+| M15 | Supervisor accountability + analytics                             | ⬜    |
 
-The full plan for M10–M15 lives at
-`/c/Users/liqui/.claude/plans/i-want-to-plan-cozy-avalanche.md`.
+Architectural detail for M11–M15 lives in `CLAUDE.md` under "Planned
+architecture."
 
 ---
 
