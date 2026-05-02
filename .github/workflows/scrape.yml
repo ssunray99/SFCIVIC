@@ -1,0 +1,76 @@
+name: Scrape civic meetings
+
+on:
+  schedule:
+    # Daily at 14:00 UTC (06:00 PT / 07:00 PDT).
+    # Runs every day to pick up newly posted agendas, updated event pages,
+    # and minutes that land days or weeks after a hearing.
+    - cron: '0 14 * * *'
+  # Allow manual runs from the Actions tab for testing or backfills.
+  workflow_dispatch:
+
+jobs:
+  scrape:
+    name: Scrape ${{ matrix.source }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    strategy:
+      # Don't cancel other sources if one fails.
+      fail-fast: false
+      matrix:
+        source:
+          - planning
+          # TODO(M4): uncomment once BOS + hearings scrapers are implemented.
+          # The scraper entry points (npm run scrape:bos / scrape:hearings) and
+          # the source rows in supabase/seed.sql already exist — they just need
+          # the scraper logic in scraper/sources/bos.ts and scraper/sources/hearings.ts.
+          # - bos
+          # - hearings
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Playwright downloads ~150 MB of Chromium. Cache it keyed to the lockfile
+      # so it only re-downloads when playwright version changes.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: pw-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Playwright Chromium + system deps
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install chromium --with-deps
+
+      - name: Install Playwright system deps (browser already cached)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      # The scraper reads credentials via --env-file=.env.local (see package.json).
+      # We write the file here from Actions secrets rather than changing the npm
+      # script, so local dev behaviour is unchanged.
+      #
+      # Required secrets (set in repo Settings → Secrets → Actions):
+      #   SUPABASE_URL            — project URL (https://xxx.supabase.co)
+      #   SUPABASE_SERVICE_ROLE_KEY — service-role key (bypasses RLS; keep private)
+      #   ANTHROPIC_API_KEY       — Anthropic API key for LLM extraction
+      - name: Write .env.local from secrets
+        run: |
+          printf 'SUPABASE_URL=%s\nSUPABASE_SERVICE_ROLE_KEY=%s\nANTHROPIC_API_KEY=%s\n' \
+            "${{ secrets.SUPABASE_URL }}" \
+            "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+            "${{ secrets.ANTHROPIC_API_KEY }}" \
+            > .env.local
+
+      - name: Run ${{ matrix.source }} scraper
+        run: npm run scrape:${{ matrix.source }}
