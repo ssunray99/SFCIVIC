@@ -323,9 +323,10 @@ export async function scrape(): Promise<void> {
       }
 
       const date = meetingDate ?? new Date().toISOString().slice(0, 10);
-      const externalId = eventUrl.split('/').pop() ?? null;
+      // Strip query string so the slug is stable regardless of UTM params etc.
+      const externalId = eventUrl.split('/').pop()?.split('?')[0] ?? null;
 
-      const { error: insertErr } = await supabase.from('meetings').insert({
+      const { data: inserted, error: insertErr } = await supabase.from('meetings').insert({
         source_id: SOURCE_ID,
         external_id: externalId,
         title: `SF Planning Commission — ${title}`,
@@ -334,11 +335,46 @@ export async function scrape(): Promise<void> {
         raw_storage_path: rawStoragePath,
         content_hash: contentHash,
         needs_ocr: needsOcr,
-      });
+      }).select('id').single();
 
       if (insertErr) {
         if (insertErr.code === '23505') {
-          console.log(`[planning] duplicate insert skipped`);
+          // The event page HTML changed (e.g. minutes posted, agenda PDF added)
+          // so the hash differs, but the row already exists by external_id.
+          // Update the row with the new hash and re-run LLM if no items yet.
+          console.log(`[planning] content changed for ${externalId}, updating row`);
+          const { data: existingRow } = await supabase
+            .from('meetings')
+            .select('id, needs_ocr')
+            .eq('source_id', SOURCE_ID)
+            .eq('external_id', externalId)
+            .maybeSingle();
+
+          if (existingRow) {
+            await supabase
+              .from('meetings')
+              .update({
+                content_hash: contentHash,
+                raw_storage_path: rawStoragePath,
+                needs_ocr: needsOcr,
+                agenda_url: sourceUrl,
+              })
+              .eq('id', existingRow.id);
+
+            if (!needsOcr) {
+              const { count } = await supabase
+                .from('agenda_items')
+                .select('id', { count: 'exact', head: true })
+                .eq('meeting_id', existingRow.id);
+
+              if ((count ?? 0) === 0) {
+                console.log(`[planning] re-running LLM for updated meeting ${existingRow.id}`);
+                await runLlmExtraction(supabase, existingRow.id, `SF Planning Commission — ${title}`, agendaText);
+              } else {
+                console.log(`[planning] meeting ${existingRow.id} already has ${count} item(s), skipping LLM`);
+              }
+            }
+          }
         } else {
           console.error(`[planning] insert error:`, insertErr.message);
         }
@@ -348,14 +384,7 @@ export async function scrape(): Promise<void> {
       itemsNew++;
       console.log(`[planning] ✓ stored: ${title} (${date})`);
 
-      const meetingId = await supabase
-        .from('meetings')
-        .select('id')
-        .eq('source_id', SOURCE_ID)
-        .eq('content_hash', contentHash)
-        .single()
-        .then(({ data }) => data?.id ?? null);
-
+      const meetingId = inserted?.id ?? null;
       if (meetingId && !needsOcr) {
         await runLlmExtraction(supabase, meetingId, `SF Planning Commission — ${title}`, agendaText);
       }
