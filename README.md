@@ -16,19 +16,33 @@ This is a learning project. The plan and milestones live at
 
 ## Status
 
-**Milestone 7 complete.** Filters (neighborhood, district, topic, source), full-text search across agenda items, meeting detail pages, and an about page are all live.
+**Milestone 10 complete.** Addresses are now extracted by the LLM, geocoded
+via Nominatim (cached), and resolved to neighborhood + supervisor district
+via point-in-polygon on DataSF Analysis Neighborhoods + Current Supervisor
+Districts polygons. Per-item action fields (written-comment deadline, email,
+portal, in-person slot) are surfaced as a "Take action by {date}" CTA on
+upcoming items.
 
-| M  | Goal                                              | State |
-| -- | ------------------------------------------------- | ----- |
-| M1 | Skeleton, schema, shadcn walkthrough              | ✅    |
-| M2 | Planning Commission scraper end-to-end (no LLM)   | ✅    |
-| M3 | LLM extraction with Claude Haiku 4.5              | ✅    |
-| M4 | BOS + hearings sources                            | ✅    |
-| M5 | Frontend list page                                | ✅    |
-| M6 | Filters & search                                  | ✅    |
-| M7 | Detail pages + about                              | ✅    |
-| M8 | GitHub Actions cron                               | ✅    |
-| M9 | Vercel deploy                                     | ⬜    |
+| M   | Goal                                                              | State |
+| --- | ----------------------------------------------------------------- | ----- |
+| M1  | Skeleton, schema, shadcn walkthrough                              | ✅    |
+| M2  | Planning Commission scraper end-to-end (no LLM)                   | ✅    |
+| M3  | LLM extraction with Claude Haiku 4.5                              | ✅    |
+| M4  | BOS + hearings sources                                            | ✅    |
+| M5  | Frontend list page                                                | ✅    |
+| M6  | Filters & search                                                  | ✅    |
+| M7  | Detail pages + about                                              | ✅    |
+| M8  | GitHub Actions cron                                               | ✅    |
+| M9  | Vercel deploy                                                     | ⬜    |
+| M10 | Address geocoding + implicit neighborhoods + action layer         | ✅    |
+| M11 | Address search UI (foreground for users)                          | ⬜    |
+| M12 | SFMTA Board of Directors scraper                                  | ⬜    |
+| M13 | Browse-by-neighborhood / browse-by-topic pages                    | ⬜    |
+| M14 | Project / legislation tracking (linked items across meetings)     | ⬜    |
+| M15 | Analytics ("how many housing projects in District 9 this year?")  | ⬜    |
+
+The full plan for M10–M15 lives at
+`/c/Users/liqui/.claude/plans/i-want-to-plan-cozy-avalanche.md`.
 
 ---
 
