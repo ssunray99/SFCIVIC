@@ -95,11 +95,10 @@ export async function scrape(): Promise<void> {
       pdfCount: Array.from(document.querySelectorAll('a[href]')).filter((a) =>
         (a as HTMLAnchorElement).href.toLowerCase().endsWith('.pdf'),
       ).length,
-      snippet: document.body.innerText.slice(0, 400),
-      links: Array.from(document.querySelectorAll('a[href]')).slice(0, 30).map((a) => ({
-        text: (a.textContent ?? '').trim().slice(0, 80),
-        href: (a as HTMLAnchorElement).href,
-      })),
+      snippet: document.body.innerText.slice(0, 600),
+      links: Array.from(document.querySelectorAll('a[href]'))
+        .map((a) => ({ text: (a.textContent ?? '').trim().slice(0, 80), href: (a as HTMLAnchorElement).href }))
+        .filter(({ href }) => href.includes('sfplanning.org/permit') || href.toLowerCase().endsWith('.pdf')),
     }));
     console.log(`[hearings] page: ${pageUrl}`);
     console.log(`[hearings] row selector matches: ${debug.rowCount}, PDF links: ${debug.pdfCount}`);
