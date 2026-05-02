@@ -1,7 +1,29 @@
-// pdf-parse is CommonJS; this wrapper keeps the rest of the scraper in ESM-style imports.
-// pdf-parse ships CommonJS; skipLibCheck in tsconfig covers the missing types.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const pdfParse = require('pdf-parse') as (buf: Buffer) => Promise<{ text: string }>;
+// pdf-parse changed its export shape between v1 (default callable) and
+// v2 ({ pdf } named export). The installed package version may differ from
+// what @types/pdf-parse describes, so probe at load time and resolve to a
+// callable function regardless of which shape is present.
+
+type PdfFn = (buf: Buffer) => Promise<{ text: string }>;
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any
+const _mod: any = require('pdf-parse');
+
+const pdfParse: PdfFn =
+  typeof _mod === 'function'
+    ? _mod
+    : typeof _mod?.pdf === 'function'
+      ? _mod.pdf
+      : typeof _mod?.default === 'function'
+        ? _mod.default
+        : typeof _mod?.default?.pdf === 'function'
+          ? _mod.default.pdf
+          : (() => {
+              const shape =
+                _mod && typeof _mod === 'object'
+                  ? `keys=[${Object.keys(_mod).join(', ')}]`
+                  : `typeof=${typeof _mod}`;
+              throw new Error(`pdf-parse: no callable export found (${shape})`);
+            })();
 
 const MIN_TEXT_LENGTH = 500;
 
@@ -21,7 +43,6 @@ export async function extractPdfText(bytes: Buffer): Promise<PdfResult> {
       needsOcr: text.length < MIN_TEXT_LENGTH,
     };
   } catch (err) {
-    // Log the actual error so we can diagnose PDF format issues
     console.warn('[pdf] parse error:', err instanceof Error ? err.message : String(err));
     return { text: '', needsOcr: true };
   }
