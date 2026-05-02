@@ -74,10 +74,10 @@ export async function scrape(): Promise<void> {
       })
       .filter((url): url is string => url !== null);
 
-    // Temporary: log all hub links so we can verify pattern matching
-    console.log('[bos] hub links found:');
-    for (const { text, href } of hubLinks.filter((l) => l.href.startsWith(BASE_URL + '/'))) {
-      console.log(`  "${text.trim()}" → ${href}`);
+    // Temporary: log all links on the page (unfiltered) for diagnosis
+    console.log(`[bos] hub page has ${hubLinks.length} total links:`);
+    for (const { text, href } of hubLinks.slice(0, 40)) {
+      console.log(`  "${text.replace(/\s+/g, ' ').trim()}" → ${href}`);
     }
     console.log(`[bos] found ${committeeUrls.length} committee page(s)`);
 
