@@ -1,8 +1,7 @@
-import { newContext, fetchBytes } from '../lib/playwright.ts';
+import { newContext } from '../lib/playwright.ts';
 import { sha256 } from '../lib/hash.ts';
-import { extractPdfText } from '../lib/pdf.ts';
 import { uploadRaw } from '../lib/storage.ts';
-import { extractAgendaItems, htmlToText } from '../lib/llm.ts';
+import { extractAgendaItems } from '../lib/llm.ts';
 import { createAdminClient } from '@/lib/supabase/admin.ts';
 
 const SOURCE_ID = 'hearings';
@@ -10,12 +9,9 @@ const NOTICES_URL = 'https://sfplanning.org/permit/notices-legislative-amendment
 // Only import notices from this year onwards.
 const SCRAPE_FROM = `${new Date().getFullYear()}-01-01`;
 
-const MAX_TEXT_PER_PDF = 30_000;
-const MAX_TEXT_TOTAL = 80_000;
-
-// Each notice on this page is filed for a specific Planning Commission hearing
-// date. We store it as a 'hearings' meeting row with meeting_date = that PC
-// hearing date so the frontend can correlate both records by date.
+// The page is a single long document. Each section is headed by a date line
+// like "March 12, 2026 - Planning Commission". The section body contains the
+// full text of all legislative amendment notices for that hearing.
 export async function scrape(): Promise<void> {
   const supabase = createAdminClient();
 
@@ -36,201 +32,75 @@ export async function scrape(): Promise<void> {
 
     await page.goto(NOTICES_URL, { waitUntil: 'networkidle', timeout: 45_000 });
 
-    // Collect notice entries. The page may be a table or a list of links;
-    // we gather every row / item that has a PDF link and a parseable date.
-    type NoticeEntry = {
-      title: string;
-      hearingDate: string | null;
-      pdfUrls: string[];
-      detailUrl: string | null;
-      pageUrl: string;
-    };
+    // Extract each date section from the page DOM. Each section heading looks
+    // like "March 12, 2026 - Planning Commission"; the content below it (until
+    // the next heading) is the notices for that hearing.
+    type Section = { heading: string; content: string; anchor: string };
 
-    // Collect raw DOM data in the browser; do date parsing in Node.js to
-    // avoid esbuild injecting __name() helpers into the evaluate string.
-    type RawRow = { text: string; title: string; pdfUrls: string[]; detailUrl: string | null };
-    type RawPdf = { href: string; linkText: string; context: string };
+    const sections = await page.evaluate((): Section[] => {
+      const results: Section[] = [];
+      const headings = Array.from(
+        document.querySelectorAll('h2, h3, [class*="heading"], [class*="date"]'),
+      ).filter((el) =>
+        /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/i.test(
+          (el as HTMLElement).innerText ?? '',
+        ),
+      );
 
-    const { rawRows, rawPdfs, pageUrl } = await page.evaluate((): {
-      rawRows: RawRow[];
-      rawPdfs: RawPdf[];
-      pageUrl: string;
-    } => {
-      const rows = Array.from(document.querySelectorAll('table tr, .views-row, .view-row'));
-      const rawRows: RawRow[] = rows.map((row) => {
-        const text = (row as HTMLElement).innerText ?? '';
-        const pdfs = Array.from(row.querySelectorAll('a[href]'))
-          .map((a) => (a as HTMLAnchorElement).href)
-          .filter((h) => h.toLowerCase().endsWith('.pdf'));
-        const detail = Array.from(row.querySelectorAll('a[href]'))
-          .map((a) => (a as HTMLAnchorElement).href)
-          .find((h) => !h.toLowerCase().endsWith('.pdf') && h.includes('/permit/')) ?? null;
-        const titleEl = row.querySelector('h2, h3, td:first-child, .views-field-title');
-        const title = (titleEl as HTMLElement | null)?.innerText?.trim() ?? text.slice(0, 80);
-        return { text, title, pdfUrls: pdfs, detailUrl: detail };
-      }).filter((r) => r.pdfUrls.length > 0 || r.detailUrl !== null);
-
-      const rawPdfs: RawPdf[] = Array.from(document.querySelectorAll('a[href]'))
-        .filter((a) => (a as HTMLAnchorElement).href.toLowerCase().endsWith('.pdf'))
-        .map((a) => {
-          const parent = a.closest('li, tr, div, p') ?? a.parentElement;
-          return {
-            href: (a as HTMLAnchorElement).href,
-            linkText: (a.textContent ?? '').trim(),
-            context: (parent as HTMLElement | null)?.innerText ?? '',
-          };
-        });
-
-      return { rawRows, rawPdfs, pageUrl: location.href };
+      for (const heading of headings) {
+        const headingText = (heading as HTMLElement).innerText.replace(/\s+/g, ' ').trim();
+        const anchor = (heading as HTMLElement).id ?? '';
+        let content = '';
+        let el = heading.nextElementSibling;
+        while (el) {
+          const tag = el.tagName.toUpperCase();
+          // Stop at the next date heading
+          if (
+            (tag === 'H2' || tag === 'H3') &&
+            /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/i.test(
+              (el as HTMLElement).innerText ?? '',
+            )
+          ) break;
+          content += (el as HTMLElement).innerText + '\n';
+          el = el.nextElementSibling;
+        }
+        if (content.trim()) results.push({ heading: headingText, content: content.trim(), anchor });
+      }
+      return results;
     });
 
-    // Temporary: log page structure to diagnose zero results
-    const debug = await page.evaluate((): {
-      rowCount: number;
-      pdfCount: number;
-      snippet: string;
-      links: Array<{ text: string; href: string }>;
-    } => ({
-      rowCount: document.querySelectorAll('table tr, .views-row, .view-row').length,
-      pdfCount: Array.from(document.querySelectorAll('a[href]')).filter((a) =>
-        (a as HTMLAnchorElement).href.toLowerCase().endsWith('.pdf'),
-      ).length,
-      snippet: document.body.innerText.slice(0, 600),
-      links: Array.from(document.querySelectorAll('a[href]'))
-        .map((a) => ({ text: (a.textContent ?? '').trim().slice(0, 80), href: (a as HTMLAnchorElement).href }))
-        .filter(({ href }) => href.includes('sfplanning.org/permit') || href.toLowerCase().endsWith('.pdf')),
-    }));
-    console.log(`[hearings] page: ${pageUrl}`);
-    console.log(`[hearings] row selector matches: ${debug.rowCount}, PDF links: ${debug.pdfCount}`);
-    console.log(`[hearings] body snippet:\n${debug.snippet}`);
-    console.log(`[hearings] first 30 links:`);
-    for (const { text, href } of debug.links) console.log(`  "${text}" → ${href}`);
+    console.log(`[hearings] found ${sections.length} date section(s) on the page`);
 
-    // Parse dates in Node.js using the same helper used elsewhere.
-    function parseDateFromText(text: string): string | null {
-      const m = text.match(
+    const pageHtml = await page.content();
+    await ctx.close();
+
+    for (const section of sections) {
+      // Parse the hearing date from the heading in Node.js.
+      const m = section.heading.match(
         /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
       );
-      if (m) {
-        const d = new Date(m[0]);
-        if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+      if (!m) {
+        console.log(`[hearings] could not parse date from: "${section.heading}"`);
+        continue;
       }
-      const iso = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
-      if (iso) return iso[1];
-      return null;
-    }
+      const hearingDate = new Date(m[0]).toISOString().slice(0, 10);
 
-    const entries: NoticeEntry[] = rawRows.length > 0
-      ? rawRows.map((r) => ({
-          title: r.title,
-          hearingDate: parseDateFromText(r.text),
-          pdfUrls: r.pdfUrls,
-          detailUrl: r.detailUrl,
-          pageUrl,
-        }))
-      : rawPdfs.map((r) => ({
-          title: r.linkText || (r.href.split('/').pop() ?? ''),
-          hearingDate: parseDateFromText(r.context),
-          pdfUrls: [r.href],
-          detailUrl: null,
-          pageUrl,
-        }));
-
-    console.log(`[hearings] found ${entries.length} notice entrie(s) on the listing page`);
-
-    // Snapshot the listing page HTML as the canonical storage artefact.
-    const listingHtml = await page.content();
-
-    for (const entry of entries) {
-      itemsFound++;
-
-      // Skip if we can't determine a hearing date in the target year.
-      if (!entry.hearingDate || entry.hearingDate < SCRAPE_FROM) {
-        if (entry.hearingDate) {
-          console.log(`[hearings] skipping pre-${SCRAPE_FROM} notice (${entry.hearingDate})`);
-        } else {
-          console.log(`[hearings] no date found for: ${entry.title.slice(0, 60)}`);
-        }
+      if (hearingDate < SCRAPE_FROM) {
+        console.log(`[hearings] skipping pre-${SCRAPE_FROM} section (${hearingDate})`);
         continue;
       }
 
-      const hearingDate = entry.hearingDate;
-      let noticeText = '';
+      itemsFound++;
+      const externalId = `${hearingDate}-planning`;
+      const noticeText = `${section.heading}\n\n${section.content}`;
+      const contentHash = sha256(Buffer.from(noticeText));
 
-      // Visit detail page if we have one and need more text.
-      if (entry.detailUrl) {
-        try {
-          await page.goto(entry.detailUrl, { waitUntil: 'networkidle', timeout: 30_000 });
-          const detailHtml = await page.content();
-          noticeText = htmlToText(detailHtml);
-
-          // Also collect any additional PDF links from the detail page.
-          const morePdfs = await page.evaluate((): string[] =>
-            Array.from(document.querySelectorAll('a[href]'))
-              .map((a) => (a as HTMLAnchorElement).href)
-              .filter((h) => h.toLowerCase().endsWith('.pdf')),
-          );
-          for (const pdf of morePdfs) {
-            if (!entry.pdfUrls.includes(pdf)) entry.pdfUrls.push(pdf);
-          }
-        } catch (err) {
-          console.warn(
-            `[hearings] detail page failed ${entry.detailUrl}:`,
-            err instanceof Error ? err.message : err,
-          );
-        }
-      }
-
-      // Download and parse PDFs.
-      let pdfsWithText = 0;
-      for (const pdfUrl of entry.pdfUrls.slice(0, 4)) {
-        if (noticeText.length >= MAX_TEXT_TOTAL) break;
-        try {
-          const { bytes } = await fetchBytes(pdfUrl);
-          const r = await extractPdfText(bytes);
-          if (r.text) {
-            pdfsWithText++;
-            const label = pdfUrl.split('/').pop() ?? pdfUrl;
-            noticeText += `\n--- ${label} ---\n${r.text.slice(0, MAX_TEXT_PER_PDF)}`;
-          }
-        } catch (err) {
-          console.warn(
-            `[hearings] PDF fetch failed ${pdfUrl}:`,
-            err instanceof Error ? err.message : err,
-          );
-        }
-      }
-
-      if (entry.pdfUrls.length > 0 && pdfsWithText === 0) {
-        console.warn(
-          `[hearings] all ${entry.pdfUrls.length} PDF(s) failed — using text only`,
-        );
-      }
-
-      // Fall back to listing page HTML text if nothing else yielded content.
-      if (!noticeText.trim()) {
-        noticeText = htmlToText(listingHtml);
-      }
-
-      noticeText = noticeText.slice(0, MAX_TEXT_TOTAL);
-      const needsOcr = noticeText.trim().length < 200;
-      if (needsOcr) console.warn(`[hearings] needs OCR: ${entry.title}`);
-
-      // Use the notice PDF URL (or detail page, or listing) as the agenda link.
-      const agendaUrl = entry.pdfUrls[0] ?? entry.detailUrl ?? NOTICES_URL;
-
-      const bytes = Buffer.from(
-        // Stable key: combine the hearing date + first PDF URL so re-scraping
-        // the listing page (which changes) doesn't re-insert the same notice.
-        `${hearingDate}::${agendaUrl}`,
-      );
-      const contentHash = sha256(bytes);
-
+      // Check by external_id (stable) OR content_hash (detects updates).
       const { data: existing } = await supabase
         .from('meetings')
         .select('id')
         .eq('source_id', SOURCE_ID)
-        .eq('content_hash', contentHash)
+        .or(`external_id.eq.${externalId},content_hash.eq.${contentHash}`)
         .maybeSingle();
 
       if (existing) {
@@ -238,23 +108,25 @@ export async function scrape(): Promise<void> {
         continue;
       }
 
-      // Store listing HTML as the raw artefact (stable canonical page).
       let rawStoragePath: string | null = null;
       try {
-        const listingBytes = Buffer.from(listingHtml);
-        const listingHash = sha256(listingBytes);
+        const bytes = Buffer.from(pageHtml);
+        const pageHash = sha256(bytes);
         rawStoragePath = await uploadRaw({
           sourceId: SOURCE_ID,
-          contentHash: listingHash,
-          bytes: listingBytes,
+          contentHash: pageHash,
+          bytes,
           mime: 'text/html',
         });
       } catch (err) {
         console.warn(`[hearings] storage upload failed, continuing:`, err);
       }
 
-      const fullTitle = `SF Planning Legislative Notice — ${entry.title.trim()}`;
-      const externalId = `${hearingDate}-${contentHash.slice(0, 8)}`;
+      const agendaUrl = section.anchor
+        ? `${NOTICES_URL}#${section.anchor}`
+        : NOTICES_URL;
+
+      const fullTitle = `SF Planning Legislative Notice — ${section.heading}`;
 
       const { error: insertErr } = await supabase.from('meetings').insert({
         source_id: SOURCE_ID,
@@ -264,7 +136,7 @@ export async function scrape(): Promise<void> {
         agenda_url: agendaUrl,
         raw_storage_path: rawStoragePath,
         content_hash: contentHash,
-        needs_ocr: needsOcr,
+        needs_ocr: false,
       });
 
       if (insertErr) {
@@ -277,21 +149,19 @@ export async function scrape(): Promise<void> {
       }
 
       itemsNew++;
-      console.log(`[hearings] ✓ stored: ${fullTitle} (${hearingDate})`);
+      console.log(`[hearings] ✓ stored: ${fullTitle}`);
 
       const { data: newRow } = await supabase
         .from('meetings')
         .select('id')
         .eq('source_id', SOURCE_ID)
-        .eq('content_hash', contentHash)
+        .eq('external_id', externalId)
         .single();
 
-      if (newRow?.id && !needsOcr) {
+      if (newRow?.id) {
         await runLlmExtraction(supabase, newRow.id, fullTitle, noticeText);
       }
     }
-
-    await ctx.close();
 
     await supabase
       .from('scrape_runs')
