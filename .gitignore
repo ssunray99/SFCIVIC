@@ -36,6 +36,7 @@ yarn-error.log*
 
 # scraper local artifacts
 /scraper/.cache/
+/scraper/.debug/
 *.local.pdf
 *.local.html
 

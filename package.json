@@ -12,8 +12,10 @@
     "scrape:planning": "tsx --env-file=.env.local scraper/run.ts planning",
     "scrape:bos": "tsx --env-file=.env.local scraper/run.ts bos",
     "scrape:hearings": "tsx --env-file=.env.local scraper/run.ts hearings",
+    "extract": "tsx --env-file=.env.local scraper/run.ts extract",
     "db:types": "supabase gen types typescript --linked > src/lib/database.types.ts",
-    "db:push": "supabase db push"
+    "db:push": "supabase db push",
+    "supabase": "supabase"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.92.0",
@@ -37,8 +39,9 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "p-retry": "^8.0.0",
-    "pdf-parse": "^2.4.5",
+    "pdf-parse": "1.1.1",
     "playwright": "^1.59.1",
+    "supabase": "^2.98.0",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"
