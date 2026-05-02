@@ -1,13 +1,18 @@
 'use client';
 
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { NEIGHBORHOODS, TOPICS, DISTRICTS, SOURCES } from '@/lib/constants';
 
 const selectClass =
   'rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs text-zinc-700 shadow-sm ' +
   'hover:border-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-500 ' +
   'dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200';
+
+const inputClass =
+  'w-48 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs text-zinc-700 shadow-sm ' +
+  'placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-500 ' +
+  'dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:placeholder-zinc-500';
 
 export function FilterBar() {
   const router = useRouter();
@@ -27,9 +32,16 @@ export function FilterBar() {
   const topic = params.get('topic') ?? '';
   const district = params.get('district') ?? '';
   const source = params.get('source') ?? '';
+  const q = params.get('q') ?? '';
+
+  // Local draft for the search input so typing doesn't trigger a navigation
+  // on every keystroke — only on Enter or when the form is submitted.
+  const [draft, setDraft] = useState(q);
+  useEffect(() => { setDraft(q); }, [q]);
 
   const active = (
     [
+      q && { key: 'q', label: `"${q}"` },
       neighborhood && { key: 'neighborhood', label: neighborhood },
       topic && { key: 'topic', label: topic },
       district && { key: 'district', label: `District ${district}` },
@@ -40,6 +52,20 @@ export function FilterBar() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap gap-2">
+        <form
+          onSubmit={(e) => { e.preventDefault(); update('q', draft.trim()); }}
+          className="contents"
+        >
+          <input
+            type="search"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Search agenda items…"
+            className={inputClass}
+            aria-label="Search agenda items"
+          />
+        </form>
+
         <select
           value={neighborhood}
           onChange={(e) => update('neighborhood', e.target.value)}

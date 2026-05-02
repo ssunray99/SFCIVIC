@@ -16,7 +16,7 @@ This is a learning project. The plan and milestones live at
 
 ## Status
 
-**Milestone 5 complete.** Homepage renders recent meetings with their LLM-extracted agenda items, topic/neighborhood/district badges. Data flows: scraper → Supabase → RSC → browser.
+**Milestone 7 complete.** Filters (neighborhood, district, topic, source), full-text search across agenda items, meeting detail pages, and an about page are all live.
 
 | M  | Goal                                              | State |
 | -- | ------------------------------------------------- | ----- |
@@ -25,9 +25,9 @@ This is a learning project. The plan and milestones live at
 | M3 | LLM extraction with Claude Haiku 4.5              | ✅    |
 | M4 | BOS + hearings sources                            | ✅    |
 | M5 | Frontend list page                                | ✅    |
-| M6 | Filters & search                                  | ⬜    |
-| M7 | Detail pages + about                              | ⬜    |
-| M8 | GitHub Actions cron                               | ⬜    |
+| M6 | Filters & search                                  | ✅    |
+| M7 | Detail pages + about                              | ✅    |
+| M8 | GitHub Actions cron                               | ✅    |
 | M9 | Vercel deploy                                     | ⬜    |
 
 ---
