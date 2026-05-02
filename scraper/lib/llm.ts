@@ -48,7 +48,7 @@ export async function extractAgendaItems(
 
     const response = await client.messages.create({
       model: MODEL,
-      max_tokens: 4096,
+      max_tokens: 8192,
       // Prompt caching: system prompt + tool schema are marked ephemeral.
       // After the first call in a run the cache is warm, cutting input cost ~90%.
       system: [

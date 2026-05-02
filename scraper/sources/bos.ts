@@ -243,20 +243,17 @@ async function collectMeetingUrls(
   out: Set<string>,
 ): Promise<void> {
   console.log(`[bos] scanning listing: ${listingUrl}`);
-  let pageNum = 0;
-  let firstPage = true;
+  const MAX_PAGES = 20;
 
-  while (true) {
-    const url = firstPage
-      ? listingUrl
-      : `${listingUrl}${listingUrl.includes('?') ? '&' : '?'}page=${pageNum}`;
+  for (let pageNum = 0; pageNum < MAX_PAGES; pageNum++) {
+    const sep = listingUrl.includes('?') ? '&' : '?';
+    const url = pageNum === 0 ? listingUrl : `${listingUrl}${sep}page=${pageNum}`;
 
     try {
       await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
     } catch {
       break;
     }
-    if (firstPage) firstPage = false;
 
     const hrefs = await page.evaluate((): string[] =>
       Array.from(document.querySelectorAll('a[href]')).map(
@@ -264,7 +261,6 @@ async function collectMeetingUrls(
       ),
     );
 
-    const yearStr = String(new Date().getFullYear());
     const before = out.size;
     for (const href of hrefs) {
       if (
@@ -279,14 +275,6 @@ async function collectMeetingUrls(
     console.log(`[bos] listing page ${pageNum + 1}: ${added} new meeting link(s)`);
 
     if (added === 0) break;
-
-    // Stop once the current year disappears from the page text.
-    const pageText = await page.evaluate(() => document.body.innerText);
-    if (!pageText.includes(yearStr)) break;
-
-    const hasNext = await page.$('a[title="Go to next page"], a:has-text("Next page")');
-    if (!hasNext) break;
-    pageNum++;
   }
 }
 
