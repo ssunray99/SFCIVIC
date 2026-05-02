@@ -540,6 +540,18 @@ async function fetchLegislativeNotices(page: Page): Promise<Map<string, string>>
     await page.goto(NOTICES_URL, { waitUntil: 'networkidle', timeout: 45_000 });
 
     type RawSection = { heading: string; content: string };
+    // Debug: snapshot page structure to understand heading elements
+    const debugInfo = await page.evaluate((): { allHeadings: string[]; bodySnippet: string } => {
+      const allHeadings = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,strong,b'))
+        .map((el) => `${el.tagName} | class="${el.className}" | text="${(el as HTMLElement).innerText?.slice(0, 80).replace(/\n/g, ' ')}"`)
+        .slice(0, 30);
+      const bodySnippet = document.body.innerText.slice(0, 500).replace(/\s+/g, ' ');
+      return { allHeadings, bodySnippet };
+    });
+    console.log('[planning:notices] page body snippet:', debugInfo.bodySnippet);
+    console.log('[planning:notices] heading elements found:');
+    debugInfo.allHeadings.forEach((h) => console.log(' ', h));
+
     const rawSections = await page.evaluate((): RawSection[] => {
       const results: RawSection[] = [];
       const headings = Array.from(
