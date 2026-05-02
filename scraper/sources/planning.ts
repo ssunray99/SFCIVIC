@@ -338,7 +338,42 @@ export async function scrape(): Promise<void> {
 
       if (insertErr) {
         if (insertErr.code === '23505') {
-          console.log(`[planning] duplicate insert skipped`);
+          // The event page HTML changed (e.g. minutes posted, agenda PDF added)
+          // so the hash differs, but the row already exists by external_id.
+          // Update the row with the new hash and re-run LLM if no items yet.
+          console.log(`[planning] content changed for ${externalId}, updating row`);
+          const { data: existingRow } = await supabase
+            .from('meetings')
+            .select('id, needs_ocr')
+            .eq('source_id', SOURCE_ID)
+            .eq('external_id', externalId)
+            .maybeSingle();
+
+          if (existingRow) {
+            await supabase
+              .from('meetings')
+              .update({
+                content_hash: contentHash,
+                raw_storage_path: rawStoragePath,
+                needs_ocr: needsOcr,
+                agenda_url: sourceUrl,
+              })
+              .eq('id', existingRow.id);
+
+            if (!needsOcr) {
+              const { count } = await supabase
+                .from('agenda_items')
+                .select('id', { count: 'exact', head: true })
+                .eq('meeting_id', existingRow.id);
+
+              if ((count ?? 0) === 0) {
+                console.log(`[planning] re-running LLM for updated meeting ${existingRow.id}`);
+                await runLlmExtraction(supabase, existingRow.id, `SF Planning Commission — ${title}`, agendaText);
+              } else {
+                console.log(`[planning] meeting ${existingRow.id} already has ${count} item(s), skipping LLM`);
+              }
+            }
+          }
         } else {
           console.error(`[planning] insert error:`, insertErr.message);
         }
