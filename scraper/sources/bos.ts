@@ -104,21 +104,18 @@ export async function scrape(): Promise<void> {
         continue;
       }
 
-      // Find Agenda and Minutes links by text containing "agenda" / "minutes".
-      // sf.gov labels them "Agenda (PDF)" and "Minutes (PDF)".
-      const sectionLinks = await page.evaluate((): {
-        agenda: string | null;
-        minutes: string | null;
-      } => {
-        const out = { agenda: null as string | null, minutes: null as string | null };
-        for (const a of Array.from(document.querySelectorAll('a[href]'))) {
-          const href = (a as HTMLAnchorElement).href;
-          const text = (a.textContent ?? '').trim().toLowerCase();
-          if (!out.agenda && text.includes('agenda')) out.agenda = href;
-          if (!out.minutes && text.includes('minutes')) out.minutes = href;
-        }
-        return out;
-      });
+      // Find Agenda and Minutes links in Node.js using the same normaliseName
+      // helper so punctuation variants ("Agenda (PDF)", "View Agenda", etc.) all match.
+      const meetingLinks = await page.evaluate((): Array<{ text: string; href: string }> =>
+        Array.from(document.querySelectorAll('a[href]')).map((a) => ({
+          text: a.textContent ?? '',
+          href: (a as HTMLAnchorElement).href,
+        })),
+      );
+      const sectionLinks = {
+        agenda:  meetingLinks.find(({ text }) => normalizeName(text).includes('agenda'))?.href  ?? null,
+        minutes: meetingLinks.find(({ text }) => normalizeName(text).includes('minutes'))?.href ?? null,
+      };
 
       const eventHtml = await page.content();
 
