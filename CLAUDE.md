@@ -13,6 +13,12 @@ This is a learning project. The full plan lives at
 `/root/.claude/plans/i-want-to-build-silly-goblet.md` (also referenced from
 the README). Milestone progress is tracked in `README.md` under "Status".
 
+**Currently at M10 ✅ (address geocoding + implicit neighborhoods + action
+layer).** M11–M15 in the plan at
+`/c/Users/liqui/.claude/plans/i-want-to-plan-cozy-avalanche.md` cover
+address search UI, SFMTA scraper, browse-by-neighborhood/topic pages,
+project tracking, and analytics. M9 (Vercel deploy) is unstarted.
+
 ## Stack
 
 - **Frontend:** Next.js 16 (App Router, RSC) + Tailwind v4. Server components
@@ -35,18 +41,35 @@ the README). Milestone progress is tracked in `README.md` under "Status".
 scraper/
   run.ts                       CLI entrypoint (planning|bos|hearings|extract)
   sources/planning.ts          SF Planning Commission scraper
+  sources/bos.ts               SF Board of Supervisors scraper
   lib/playwright.ts            Browser bootstrap + fetchBytes()
   lib/pdf.ts                   pdf-parse wrapper (PINNED v1.1.1)
   lib/storage.ts               Supabase Storage upload helper
   lib/hash.ts                  sha256 helper
   lib/llm.ts                   extractAgendaItems() — Anthropic call
+  lib/extract-pipeline.ts      persistExtractedItems() — shared post-LLM
+                               pipeline (geocode → polygon-resolve → insert
+                               agenda_items + agenda_item_locations); both
+                               source scrapers thin-call this
+  lib/geocode.ts               Nominatim geocoder (1.1s throttle, SF bbox)
+                               with cache-first lookup against address_cache
+  lib/geo.ts                   Hand-rolled point-in-polygon (handles
+                               MultiPolygons + holes), haversine, bbox.
+                               Uses scraper/data/{neighborhoods,districts}.geojson.
+                               DATASF_TO_ENUM maps DataSF analysis-neighborhood
+                               names to our closed enum.
+  data/neighborhoods.geojson   DataSF Analysis Neighborhoods (4x4: ajp5-b2md)
+  data/districts.geojson       DataSF Current Supervisor Districts (4x4: keex-zmn4)
+  setup/fetch-geo.ts           One-shot polygon downloader; npm run fetch:geo
   prompts/extract.ts           SYSTEM_PROMPT + TOOL_SCHEMA + PROMPT_VERSION
 
 src/
   app/page.tsx                 RSC homepage — Upcoming + Past sections
   app/layout.tsx               Root layout
-  components/MeetingCard.tsx   Meeting + its items
-  components/ItemCard.tsx      Single agenda item (with badges)
+  components/MeetingCard.tsx   Meeting + its items (passes meetingUpcoming
+                               down so ItemCard can hide stale CTAs)
+  components/ItemCard.tsx      Single agenda item (with badges + amber
+                               "Take action" CTA when action fields present)
   components/Badge.tsx         Tailwind-only badge primitive
   lib/constants.ts             NEIGHBORHOODS, TOPICS, DISTRICTS, SOURCES
                                (single source of truth — used by LLM prompt
@@ -57,8 +80,11 @@ src/
   lib/utils.ts                 cn() helper
 
 supabase/
-  migrations/0001_init.sql     Schema (4 tables, RLS, GIN indexes)
-  seed.sql                     sources rows
+  migrations/0001_init.sql                   Initial schema (4 tables, RLS, GIN)
+  migrations/0002_locations_and_actions.sql  Adds agenda_item_locations,
+                                             address_cache, and 4 action-layer
+                                             columns on agenda_items
+  seed.sql                                   sources rows
 ```
 
 ## Critical conventions
@@ -139,6 +165,49 @@ Default limits are 50 / 25.
 
 Civic UX: foreground what's about to happen, then show recent history.
 
+### Address geocoding pipeline (M10)
+
+`scraper/lib/extract-pipeline.ts` is the shared post-LLM step both source
+scrapers call. For each item the LLM emits:
+
+1. Geocode each `addresses[]` entry via `geocodeAddress()` — cache-first
+   lookup against `address_cache`, then Nominatim with SF bounding box and
+   1.1s throttle. Negative results are cached too so we don't retry forever.
+2. For each successful geocode, resolve the (lat, lng) to a closed-enum
+   neighborhood via `neighborhoodFromPoint()` and a supervisor district 1–11
+   via `districtFromPoint()`. Polygons live in `scraper/data/*.geojson`.
+3. Insert `agenda_items` rows. The polygon-derived neighborhoods are
+   **unioned** into `agenda_items.neighborhoods` (so the existing GIN index
+   + filter UI keep working with no change), and `district` falls back to
+   the polygon answer when the LLM left it null.
+4. Insert one `agenda_item_locations` row per address (raw, lat/lng,
+   resolved neighborhood, resolved district, geocode_source).
+
+`DATASF_TO_ENUM` in `geo.ts` maps DataSF Analysis Neighborhood names to our
+31-entry enum. DataSF names with no enum equivalent (Outer Mission, Presidio
+Heights, etc.) intentionally return null neighborhood — district resolution
+still works. Don't add new neighborhood values without updating both the
+enum in `src/lib/constants.ts` AND the mapping in `geo.ts`.
+
+The geo helpers and polygon assets live under `scraper/` rather than `src/`
+because (a) they're scraper-side today and (b) the .geojson files are 1.4MB
++ 460KB, which we don't want bundled into the Next.js client. When M11
+adds an `/api/locate` route, it imports from `scraper/lib/geo.ts` directly.
+
+### Action layer (M10)
+
+`agenda_items` has four optional fields populated by the LLM tool schema
+when the source mentions them: `comment_deadline` (date), `comment_email`,
+`comment_portal_url`, `in_person_slot` (free-form datetime+location).
+
+`ItemCard` renders an amber "Take action by {date}" CTA when:
+- the meeting is upcoming OR `comment_deadline` is in the future, AND
+- at least one of the four fields is non-null
+
+The CTA shows `mailto:` for `comment_email`, an external link for
+`comment_portal_url`, and the raw text for `in_person_slot`. `MeetingCard`
+computes `meetingUpcoming` once and passes it down to all child `ItemCard`s.
+
 ### Anthropic SDK call
 
 In `scraper/lib/llm.ts`:
@@ -163,6 +232,8 @@ npm run extract           # re-run LLM on stored meetings (limited utility —
                           # storage holds event HTML, not packet PDF text)
 npm run db:types          # regenerate src/lib/database.types.ts from cloud
 npm run db:push           # apply migrations to linked cloud project
+npm run fetch:geo         # re-download SF neighborhood + district polygons
+                          # from DataSF into scraper/data/
 ```
 
 ## Things to avoid
@@ -174,10 +245,13 @@ npm run db:push           # apply migrations to linked cloud project
   re-fetch from sfplanning.org on demand.
 - **Don't run the scraper from Vercel.** It uses Playwright with full
   Chromium; Vercel's 10-second function timeout doesn't fit. Scraper runs
-  in GitHub Actions (planned in M8).
+  in GitHub Actions (`.github/workflows/scrape.yml`, daily cron).
 - **Don't put the service-role key in any `NEXT_PUBLIC_` var or in Vercel.**
   It bypasses RLS — only the scraper sees it (via `.env.local` locally,
   via Actions secrets in CI).
+- **Don't add a new entry to `NEIGHBORHOODS` without also updating
+  `DATASF_TO_ENUM` in `scraper/lib/geo.ts`.** Otherwise polygon-derived
+  neighborhoods will silently disagree with the closed enum.
 - **Don't add error handling for cases that can't happen.** Trust framework
   guarantees; only validate at boundaries (LLM output, scraped HTML).
 - **Don't use `--no-verify` or skip hooks.**
