@@ -97,17 +97,27 @@ export async function scrape(): Promise<void> {
       console.warn('[planning] could not switch grid filter — using upcoming-only default');
     }
 
+    // Capture the base URL once here — before any page= param is added.
+    // We must NOT re-read page.url() inside the loop or the page= params
+    // accumulate with each iteration.
+    const baseGridUrl = page.url();
+
     // Paginate through the (now filtered + sorted) grid. Since the sort is
-    // descending, newest meetings are first. Stop once a page shows no dates
-    // from SCRAPE_FROM's year — that means we've scrolled past the year boundary.
+    // descending, newest meetings are first. Stop once a page shows no
+    // "Month YYYY" group headers from the target year — that means we've
+    // scrolled past the Jan 1 boundary into the prior year.
     const scrapeYear = Number(SCRAPE_FROM.slice(0, 4));
+    const monthNames = [
+      'January','February','March','April','May','June',
+      'July','August','September','October','November','December',
+    ];
     let pageNum = 0;
     let firstPage = true;
 
     while (true) {
       if (!firstPage) {
-        const sep = page.url().includes('?') ? '&' : '?';
-        const url = `${page.url()}${sep}page=${pageNum}`;
+        const sep = baseGridUrl.includes('?') ? '&' : '?';
+        const url = `${baseGridUrl}${sep}page=${pageNum}`;
         console.log(`[planning] fetching grid page ${pageNum + 1}: ${url}`);
         await page.goto(url, { waitUntil: 'networkidle', timeout: 45_000 });
       } else {
@@ -128,14 +138,16 @@ export async function scrape(): Promise<void> {
 
       if (added === 0) break;
 
-      // Stop if this page contains no text from the target year — we've
-      // scrolled past the Jan 1 boundary into the prior year.
+      // Stop when the grid page no longer contains a "Month YYYY" heading for
+      // the target year. Bare year numbers (copyright, etc.) are intentionally
+      // excluded — only the group headers like "January 2026" count.
       const hasTargetYear = await page.evaluate(
-        (year: number) => new RegExp(`\\b${year}\\b`).test(document.body.innerText),
-        scrapeYear,
+        ({ year, months }: { year: number; months: string[] }) =>
+          months.some((m) => document.body.innerText.includes(`${m} ${year}`)),
+        { year: scrapeYear, months: monthNames },
       );
       if (!hasTargetYear) {
-        console.log(`[planning] no ${scrapeYear} events visible — stopping grid pagination`);
+        console.log(`[planning] no ${scrapeYear} month-headers visible — stopping`);
         break;
       }
 

@@ -20,7 +20,9 @@ export async function extractPdfText(bytes: Buffer): Promise<PdfResult> {
       // Flag them rather than feeding garbage to the LLM.
       needsOcr: text.length < MIN_TEXT_LENGTH,
     };
-  } catch {
+  } catch (err) {
+    // Log the actual error so we can diagnose PDF format issues
+    console.warn('[pdf] parse error:', err instanceof Error ? err.message : String(err));
     return { text: '', needsOcr: true };
   }
 }
