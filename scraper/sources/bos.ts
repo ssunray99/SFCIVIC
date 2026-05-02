@@ -50,26 +50,29 @@ export async function scrape(): Promise<void> {
     // "Budget and Appropriations" hit "Budget & Appropriations Committee".
     await page.goto(MEETINGS_HUB, { waitUntil: 'networkidle', timeout: 45_000 });
 
-    const committeeUrls = await page.evaluate(
-      ({ base, patterns }: { base: string; patterns: string[] }): string[] => {
-        const normalize = (s: string) =>
-          s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, ' ').trim();
-        const matches = (linkText: string, pattern: string) =>
-          normalize(pattern).split(' ').every((w) => normalize(linkText).includes(w));
-        const found: string[] = [];
-        for (const pattern of patterns) {
-          const match = Array.from(document.querySelectorAll('a[href]')).find((a) =>
-            matches(a.textContent ?? '', pattern),
-          );
-          if (match) {
-            const href = (match as HTMLAnchorElement).href;
-            if (href.startsWith(base)) found.push(href);
-          }
-        }
-        return [...new Set(found)];
-      },
-      { base: BASE_URL, patterns: TARGET_COMMITTEE_PATTERNS },
+    // Fetch all links from the hub and match in Node.js to avoid esbuild
+    // injecting __name() helpers into the browser-executed evaluate string.
+    const hubLinks = await page.evaluate(
+      (): Array<{ text: string; href: string }> =>
+        Array.from(document.querySelectorAll('a[href]')).map((a) => ({
+          text: a.textContent ?? '',
+          href: (a as HTMLAnchorElement).href,
+        })),
     );
+
+    function normalizeName(s: string): string {
+      return s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, ' ').trim();
+    }
+
+    const committeeUrls = TARGET_COMMITTEE_PATTERNS
+      .map((pattern) => {
+        const words = normalizeName(pattern).split(' ');
+        const match = hubLinks.find(
+          ({ text }) => words.every((w) => normalizeName(text).includes(w)),
+        );
+        return match && match.href.startsWith(BASE_URL) ? match.href : null;
+      })
+      .filter((url): url is string => url !== null);
 
     console.log(`[bos] found ${committeeUrls.length} committee page(s)`);
 
@@ -102,20 +105,18 @@ export async function scrape(): Promise<void> {
         if (firstPage) firstPage = false;
 
         // Collect links that look like individual meeting detail pages.
-        const links = await page.evaluate(
-          ({ base, year }: { base: string; year: number }): string[] =>
-            Array.from(document.querySelectorAll('a[href]'))
-              .map((a) => (a as HTMLAnchorElement).href)
-              .filter(
-                (href) =>
-                  href.startsWith(base + '/') &&
-                  !href.includes('#') &&
-                  // Meeting detail pages on sfbos.org typically contain a date
-                  // or the words "meeting" / "agenda" in the path.
-                  (href.includes(String(year)) ||
-                    /\d{4}-\d{2}-\d{2}|agenda|meeting-\d/.test(href)),
-              ),
-          { base: BASE_URL, year: scrapeYear },
+        const allHrefs = await page.evaluate(
+          (): string[] =>
+            Array.from(document.querySelectorAll('a[href]')).map(
+              (a) => (a as HTMLAnchorElement).href,
+            ),
+        );
+        const yearStr = String(scrapeYear);
+        const links = allHrefs.filter(
+          (href) =>
+            href.startsWith(BASE_URL + '/') &&
+            !href.includes('#') &&
+            (href.includes(yearStr) || /\d{4}-\d{2}-\d{2}|agenda|meeting-\d/.test(href)),
         );
 
         const before = meetingUrls.size;
