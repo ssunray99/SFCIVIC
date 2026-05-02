@@ -46,18 +46,24 @@ export async function scrape(): Promise<void> {
     const page = await ctx.newPage();
 
     // Discover committee page URLs by matching link text on the meetings hub.
-    // TODO: if sfbos.org uses ampersands ("Budget & Appropriations") instead of
-    // "and", this simple includes() match will miss them. Fix by normalising "&"
-    // to "and" and matching word-by-word. Skip for now; if committeeUrls comes
-    // back short, that's the likely cause.
+    // Normalise "&" → "and" and match word-by-word so patterns like
+    // "Budget and Appropriations" hit "Budget & Appropriations Committee".
     await page.goto(MEETINGS_HUB, { waitUntil: 'networkidle', timeout: 45_000 });
 
     const committeeUrls = await page.evaluate(
       (base: string, patterns: string[]): string[] => {
+        function normalize(s: string): string {
+          return s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, ' ').trim();
+        }
+        function matches(linkText: string, pattern: string): boolean {
+          const words = normalize(pattern).split(' ');
+          const text = normalize(linkText);
+          return words.every((w) => text.includes(w));
+        }
         const found: string[] = [];
         for (const pattern of patterns) {
           const match = Array.from(document.querySelectorAll('a[href]')).find((a) =>
-            (a.textContent ?? '').toLowerCase().includes(pattern.toLowerCase()),
+            matches(a.textContent ?? '', pattern),
           );
           if (match) {
             const href = (match as HTMLAnchorElement).href;
