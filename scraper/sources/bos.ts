@@ -7,8 +7,10 @@ import { extractAgendaItems, htmlToText } from '../lib/llm.ts';
 import { createAdminClient } from '@/lib/supabase/admin.ts';
 
 const SOURCE_ID = 'bos';
-const BASE_URL = 'https://sfbos.org';
-const MEETINGS_HUB = `${BASE_URL}/meetings`;
+const BASE_URL = 'https://www.sf.gov';
+// BOS meetings are listed under the sf.gov portal (sfbos.org redirects here).
+const EVENTS_UPCOMING = `${BASE_URL}/departments--board-supervisors/events/upcoming`;
+const EVENTS_PAST = `${BASE_URL}/departments--board-supervisors/events/past`;
 // Only import meetings from this year onwards.
 const SCRAPE_FROM = `${new Date().getFullYear()}-01-01`;
 
@@ -16,8 +18,8 @@ const MAX_TEXT_PER_PDF = 20_000;
 const MAX_TEXT_PER_RESOURCE = 80_000;
 const MAX_TEXT_TOTAL = 100_000;
 
-// Substring matches against link text on the meetings hub page.
-// Order matters: listed top-to-bottom as they appear on the page.
+// Word-level patterns matched against each meeting's page title.
+// Normalisation collapses "&" → "and" and strips punctuation before matching.
 const TARGET_COMMITTEE_PATTERNS = [
   'Full Board',
   'Budget and Appropriations',
@@ -26,6 +28,17 @@ const TARGET_COMMITTEE_PATTERNS = [
   'Public Safety and Neighborhood Services',
   'Downtown Revitalization',
 ];
+
+function normalizeName(s: string): string {
+  return s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function matchesCommittee(title: string): boolean {
+  const t = normalizeName(title);
+  return TARGET_COMMITTEE_PATTERNS.some((pattern) =>
+    normalizeName(pattern).split(' ').every((w) => t.includes(w)),
+  );
+}
 
 export async function scrape(): Promise<void> {
   const supabase = createAdminClient();
@@ -45,113 +58,29 @@ export async function scrape(): Promise<void> {
     const ctx = await newContext();
     const page = await ctx.newPage();
 
-    // Discover committee page URLs by matching link text on the meetings hub.
-    // Normalise "&" → "and" and match word-by-word so patterns like
-    // "Budget and Appropriations" hit "Budget & Appropriations Committee".
-    await page.goto(MEETINGS_HUB, { waitUntil: 'networkidle', timeout: 45_000 });
-
-    // Fetch all links from the hub and match in Node.js to avoid esbuild
-    // injecting __name() helpers into the browser-executed evaluate string.
-    const hubLinks = await page.evaluate(
-      (): Array<{ text: string; href: string }> =>
-        Array.from(document.querySelectorAll('a[href]')).map((a) => ({
-          text: a.textContent ?? '',
-          href: (a as HTMLAnchorElement).href,
-        })),
-    );
-
-    function normalizeName(s: string): string {
-      return s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, ' ').trim();
-    }
-
-    const committeeUrls = TARGET_COMMITTEE_PATTERNS
-      .map((pattern) => {
-        const words = normalizeName(pattern).split(' ');
-        const match = hubLinks.find(
-          ({ text }) => words.every((w) => normalizeName(text).includes(w)),
-        );
-        return match && match.href.startsWith(BASE_URL) ? match.href : null;
-      })
-      .filter((url): url is string => url !== null);
-
-    // Temporary: log all links on the page (unfiltered) for diagnosis
-    console.log(`[bos] hub page has ${hubLinks.length} total links:`);
-    for (const { text, href } of hubLinks.slice(0, 40)) {
-      console.log(`  "${text.replace(/\s+/g, ' ').trim()}" → ${href}`);
-    }
-    console.log(`[bos] found ${committeeUrls.length} committee page(s)`);
-
-    // Collect meeting detail URLs from each committee page.
+    // Collect individual meeting page URLs from both the upcoming and past
+    // events listings. Meeting URLs on sf.gov follow the pattern:
+    //   /www.sf.gov/{committee-slug}-meeting-{dateid}
     const meetingUrls = new Set<string>();
-    const scrapeYear = new Date().getFullYear();
-    const monthNames = [
-      'January','February','March','April','May','June',
-      'July','August','September','October','November','December',
-    ];
 
-    for (const committeeUrl of committeeUrls) {
-      console.log(`[bos] scanning committee: ${committeeUrl}`);
-
-      let pageNum = 0;
-      let firstPage = true;
-
-      while (true) {
-        const url =
-          firstPage
-            ? committeeUrl
-            : `${committeeUrl}${committeeUrl.includes('?') ? '&' : '?'}page=${pageNum}`;
-
-        try {
-          await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
-        } catch {
-          break;
-        }
-
-        if (firstPage) firstPage = false;
-
-        // Collect links that look like individual meeting detail pages.
-        const allHrefs = await page.evaluate(
-          (): string[] =>
-            Array.from(document.querySelectorAll('a[href]')).map(
-              (a) => (a as HTMLAnchorElement).href,
-            ),
-        );
-        const yearStr = String(scrapeYear);
-        const links = allHrefs.filter(
-          (href) =>
-            href.startsWith(BASE_URL + '/') &&
-            !href.includes('#') &&
-            (href.includes(yearStr) || /\d{4}-\d{2}-\d{2}|agenda|meeting-\d/.test(href)),
-        );
-
-        const before = meetingUrls.size;
-        for (const l of links) meetingUrls.add(l);
-        const added = meetingUrls.size - before;
-        console.log(`[bos] committee page ${pageNum + 1}: ${added} new meeting link(s)`);
-
-        if (added === 0) break;
-
-        // Stop paginating once the page no longer shows the target year.
-        const hasTargetYear = await page.evaluate(
-          ({ year, months }: { year: number; months: string[] }) =>
-            months.some((m) => document.body.innerText.includes(`${m} ${year}`)),
-          { year: scrapeYear, months: monthNames },
-        );
-        if (!hasTargetYear) break;
-
-        const hasNext = await page.$('a[title="Go to next page"], a:has-text("Next page")');
-        if (!hasNext) break;
-        pageNum++;
-      }
+    for (const listingUrl of [EVENTS_UPCOMING, EVENTS_PAST]) {
+      await collectMeetingUrls(page, listingUrl, BASE_URL, meetingUrls);
     }
 
-    console.log(`[bos] ${meetingUrls.size} meeting URL(s) to process`);
+    console.log(`[bos] ${meetingUrls.size} total meeting URL(s) found`);
 
     for (const meetingUrl of meetingUrls) {
-      itemsFound++;
-      console.log(`[bos] visiting meeting: ${meetingUrl}`);
-
       await page.goto(meetingUrl, { waitUntil: 'networkidle', timeout: 30_000 });
+
+      const title = await page.evaluate(
+        () => document.querySelector('h1')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+      );
+
+      // Skip committees not in our target list.
+      if (!matchesCommittee(title)) continue;
+
+      itemsFound++;
+      console.log(`[bos] processing: ${title} — ${meetingUrl}`);
 
       const meetingDate = await page.evaluate((): string | null => {
         const time = document.querySelector('time[datetime]');
@@ -175,14 +104,8 @@ export async function scrape(): Promise<void> {
         continue;
       }
 
-      const title = await page.evaluate(
-        () =>
-          document.querySelector('h1')?.textContent?.replace(/\s+/g, ' ').trim() ??
-          'SF Board of Supervisors Meeting',
-      );
-
-      // Find Agenda and Minutes links by their visible text, same pattern as
-      // the Planning Commission scraper.
+      // Find Agenda and Minutes links by text containing "agenda" / "minutes".
+      // sf.gov labels them "Agenda (PDF)" and "Minutes (PDF)".
       const sectionLinks = await page.evaluate((): {
         agenda: string | null;
         minutes: string | null;
@@ -191,51 +114,42 @@ export async function scrape(): Promise<void> {
         for (const a of Array.from(document.querySelectorAll('a[href]'))) {
           const href = (a as HTMLAnchorElement).href;
           const text = (a.textContent ?? '').trim().toLowerCase();
-          if (!out.agenda && text === 'agenda') out.agenda = href;
-          if (!out.minutes && text === 'minutes') out.minutes = href;
+          if (!out.agenda && text.includes('agenda')) out.agenda = href;
+          if (!out.minutes && text.includes('minutes')) out.minutes = href;
         }
         return out;
       });
 
-      // Snapshot the meeting page HTML before navigating away.
       const eventHtml = await page.content();
 
-      // Past meetings: Agenda + Minutes.  Future meetings: Agenda only.
       const today = new Date().toISOString().slice(0, 10);
       const isPast = !!meetingDate && meetingDate < today;
 
       let agendaText = '';
 
       if (sectionLinks.agenda) {
-        console.log(`[bos] agenda link: ${sectionLinks.agenda}`);
+        console.log(`[bos] agenda: ${sectionLinks.agenda}`);
         const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_PER_RESOURCE);
         agendaText += r.text;
       }
 
       if (isPast && sectionLinks.minutes && agendaText.length < MAX_TEXT_TOTAL) {
-        console.log(`[bos] minutes link: ${sectionLinks.minutes}`);
-        const remaining = MAX_TEXT_TOTAL - agendaText.length;
+        console.log(`[bos] minutes: ${sectionLinks.minutes}`);
         const r = await gatherTextFromLink(
           page,
           sectionLinks.minutes,
-          Math.min(MAX_TEXT_PER_RESOURCE, remaining),
+          Math.min(MAX_TEXT_PER_RESOURCE, MAX_TEXT_TOTAL - agendaText.length),
         );
         if (r.text) agendaText += `\n\n======== MINUTES ========\n\n${r.text}`;
       }
 
-      // Fall back to event-page text if links yielded nothing.
       if (!agendaText.trim()) agendaText = htmlToText(eventHtml);
 
       agendaText = agendaText.slice(0, MAX_TEXT_TOTAL);
       const needsOcr = agendaText.trim().length < 200;
       if (needsOcr) console.warn(`[bos] needs OCR: ${meetingUrl}`);
 
-      // agenda_url: for past meetings use the event page (user can navigate to
-      // both Agenda and Minutes); for future use the agenda link if available.
-      const sourceUrl = isPast
-        ? meetingUrl
-        : (sectionLinks.agenda ?? meetingUrl);
-
+      const sourceUrl = isPast ? meetingUrl : (sectionLinks.agenda ?? meetingUrl);
       const bytes = Buffer.from(eventHtml);
       const contentHash = sha256(bytes);
       const date = meetingDate ?? new Date().toISOString().slice(0, 10);
@@ -255,12 +169,7 @@ export async function scrape(): Promise<void> {
 
       let rawStoragePath: string | null = null;
       try {
-        rawStoragePath = await uploadRaw({
-          sourceId: SOURCE_ID,
-          contentHash,
-          bytes,
-          mime: 'text/html',
-        });
+        rawStoragePath = await uploadRaw({ sourceId: SOURCE_ID, contentHash, bytes, mime: 'text/html' });
       } catch (err) {
         console.warn(`[bos] storage upload failed, continuing:`, err);
       }
@@ -326,9 +235,64 @@ export async function scrape(): Promise<void> {
 }
 
 /**
- * Fetch text from a BOS link, which may be a direct PDF or an HTML page
- * that lists linked PDFs (same dual-mode logic as the Planning scraper).
+ * Paginate a sf.gov BOS events listing page and collect individual meeting URLs.
+ * Meeting links on sf.gov follow the pattern /www.sf.gov/*-meeting-* or
+ * /www.sf.gov/*committee-meeting*.
  */
+async function collectMeetingUrls(
+  page: Page,
+  listingUrl: string,
+  base: string,
+  out: Set<string>,
+): Promise<void> {
+  console.log(`[bos] scanning listing: ${listingUrl}`);
+  let pageNum = 0;
+  let firstPage = true;
+
+  while (true) {
+    const url = firstPage
+      ? listingUrl
+      : `${listingUrl}${listingUrl.includes('?') ? '&' : '?'}page=${pageNum}`;
+
+    try {
+      await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
+    } catch {
+      break;
+    }
+    if (firstPage) firstPage = false;
+
+    const hrefs = await page.evaluate((): string[] =>
+      Array.from(document.querySelectorAll('a[href]')).map(
+        (a) => (a as HTMLAnchorElement).href,
+      ),
+    );
+
+    const yearStr = String(new Date().getFullYear());
+    const before = out.size;
+    for (const href of hrefs) {
+      if (
+        href.startsWith(base + '/') &&
+        !href.includes('#') &&
+        /committee-meeting|board-meeting|meeting-\d/.test(href)
+      ) {
+        out.add(href);
+      }
+    }
+    const added = out.size - before;
+    console.log(`[bos] listing page ${pageNum + 1}: ${added} new meeting link(s)`);
+
+    if (added === 0) break;
+
+    // Stop once the current year disappears from the page text.
+    const pageText = await page.evaluate(() => document.body.innerText);
+    if (!pageText.includes(yearStr)) break;
+
+    const hasNext = await page.$('a[title="Go to next page"], a:has-text("Next page")');
+    if (!hasNext) break;
+    pageNum++;
+  }
+}
+
 async function gatherTextFromLink(
   page: Page,
   url: string,
@@ -345,7 +309,6 @@ async function gatherTextFromLink(
     }
   }
 
-  // HTML page — visit it, extract page text, then download any linked PDFs.
   try {
     await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
     const html = await page.content();
@@ -374,10 +337,7 @@ async function gatherTextFromLink(
           totalLen += block.length;
         }
       } catch (err) {
-        console.warn(
-          `[bos] PDF fetch/parse failed ${pdfUrl}:`,
-          err instanceof Error ? err.message : err,
-        );
+        console.warn(`[bos] PDF parse failed ${pdfUrl}:`, err instanceof Error ? err.message : err);
       }
     }
 
