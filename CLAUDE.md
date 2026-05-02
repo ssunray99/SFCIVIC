@@ -4,20 +4,27 @@ Guidance for Claude working in this repo. Read this before making changes.
 
 ## What this is
 
-**SF Civic Tracker** — a Next.js + Supabase site that scrapes SF Planning
-Commission, Board of Supervisors, and public hearing notices, runs each
-meeting's agenda through Claude Haiku 4.5 to extract structured items, and
-lets visitors filter by neighborhood, district, or topic.
+**SF Civic Tracker** — a Next.js + Supabase site that aggregates SF civic
+activity from multiple sources (Planning Commission, Historic Preservation
+Commission, Board of Supervisors + standing committees, SFMTA Board,
+public hearing notices), runs each meeting's agenda through Claude
+Haiku 4.5 to extract structured items, and lets visitors filter by
+neighborhood, district, or topic and follow individual pieces of
+legislation across committees.
 
 This is a learning project. The full plan lives at
 `/root/.claude/plans/i-want-to-build-silly-goblet.md` (also referenced from
 the README). Milestone progress is tracked in `README.md` under "Status".
 
-**Currently at M10 ✅ (address geocoding + implicit neighborhoods + action
-layer).** M11–M15 in the plan at
-`/c/Users/liqui/.claude/plans/i-want-to-plan-cozy-avalanche.md` cover
-address search UI, SFMTA scraper, browse-by-neighborhood/topic pages,
-project tracking, and analytics. M9 (Vercel deploy) is unstarted.
+**Currently at M10 ✅** (address geocoding + implicit neighborhoods +
+action layer). M11 puts address search in front of users. M12 expands
+the source list — a Legistar Web API client (which covers BOS + every
+standing committee in one shot and replaces the Playwright BOS scraper),
+plus HPC and SFMTA scrapers. M13 adds browse-by-neighborhood / topic
+pages. M14 layers project tracking on Legistar `Matters`. M15 covers
+analytics and supervisor accountability views. M9 (Vercel deploy) is
+unstarted. See "Planned architecture (M11–M15)" near the bottom of this
+file for data-model and ingestion-path decisions.
 
 ## Stack
 
@@ -29,8 +36,16 @@ project tracking, and analytics. M9 (Vercel deploy) is unstarted.
   `src/lib/database.types.ts` (regenerate with `npm run db:types`).
 - **Storage:** Supabase Storage bucket `raw` holds archival event-page HTML
   per meeting (path `raw/{source_id}/{yyyy}/{mm}/{content_hash}.html`).
-- **Scraper:** Playwright Chromium + tsx. Lives in `/scraper`, runs locally
-  via `npm run scrape:planning` (and eventually GitHub Actions on cron).
+- **Scraper:** Two ingestion paths in `/scraper`, both invoked via tsx and
+  scheduled by GitHub Actions:
+  - **Playwright Chromium** for HTML/PDF sources where there's no API —
+    Planning Commission today; HPC, SFMTA Board, and the long-tail
+    commissions in M12.
+  - **Legistar Web API client** (M12+) for sources hosted on Legistar —
+    Board of Supervisors and every BOS standing committee, plus the
+    `Matters` graph that powers M14. Pure JSON over HTTPS, no browser.
+  Both paths funnel into the same `lib/extract-pipeline.ts` for LLM
+  tagging + geocoding + persistence.
 - **LLM:** `claude-haiku-4-5-20251001` via `@anthropic-ai/sdk`. Tool-use with
   forced `record_agenda_items` tool for structured output. Prompt caching on
   system prompt + tool schema.
@@ -236,6 +251,97 @@ npm run fetch:geo         # re-download SF neighborhood + district polygons
                           # from DataSF into scraper/data/
 ```
 
+## Planned architecture (M11–M15)
+
+This section captures the architectural decisions for upcoming milestones
+so future work doesn't have to re-derive them. Update as milestones land
+or as decisions change.
+
+### Source taxonomy: two ingestion paths
+
+Sources fall into two patterns. Both end at the same persistence step
+(`lib/extract-pipeline.ts`), but the front half differs:
+
+- **HTML/PDF scrape** (Playwright + LLM): Planning Commission, public
+  hearing notices, future HPC + SFMTA scrapers, plus any long-tail
+  commission additions (Recreation & Park, Port, Entertainment, Police,
+  Board of Appeals). Each is a `scraper/sources/<name>.ts` that walks a
+  grid, fetches agenda PDFs, and passes text to `extractAgendaItems()`.
+  HPC clones `planning.ts` directly — same site, same shape.
+- **Legistar Web API** (no Playwright): Board of Supervisors and every
+  BOS standing committee. SF runs on Legistar at
+  `https://webapi.legistar.com/v1/sfgov`, exposing Bodies, Events,
+  EventItems, Matters, Histories, Sponsors, Votes as paginated JSON over
+  OData v3. M12 introduces `scraper/lib/legistar.ts` (typed client,
+  handles paging + the 1000-row cap + OData filter syntax) and
+  `scraper/sources/bos-legistar.ts` that walks every Body of type
+  `Primary Legislative Body` and `Standing Committee`, then their
+  Events, then `Events/{id}?EventItems=1`. The legacy
+  `scraper/sources/bos.ts` Playwright scraper is removed once parity is
+  verified.
+
+### Matters: the project model (M14)
+
+Today `agenda_items` are island-meetings — the same ordinance appearing
+on Land Use Committee 4/15 and Full Board 4/29 is two unrelated rows.
+Legistar's `Matters` resource gives each piece of legislation a stable
+identifier (`MatterFile` like `"231256"`) that joins those appearances
+together.
+
+M14 introduces:
+
+- A `matters` table mirroring Legistar `Matters` fields: `matter_file`
+  (PK), `title`, `type`, `status`, `intro_date`, `passed_date`,
+  `enactment_date`, `requester`. Daily ingest via paginated walk over
+  `MatterIntroDate` ranges.
+- `agenda_items.matter_id` nullable FK, backfilled from
+  `EventItem.MatterId` captured during M12 ingest.
+- `/projects/[matter_file]` page: header (title, type, status,
+  sponsors), history timeline across committees, every meeting where
+  the item appeared, neighborhoods union, action CTA if open for
+  comment.
+- Optional sub-tables `matter_sponsors`, `matter_histories`,
+  `matter_votes` for richer queries — these feed M15's supervisor
+  accountability views.
+
+When an item links to a matter, the structured Legistar fields
+(`title`, `type`, `status`) are preferred over the LLM output for
+those fields. The LLM's job for Legistar-backed items shrinks to
+topic / neighborhood / address / action-field extraction from the body
+text, which is the part that's genuinely AI work.
+
+### What Legistar does NOT cover
+
+- **Planning Commission** and **HPC** — `sfplanning.org`, not Legistar.
+  Existing + cloned scrapers stay.
+- **SFMTA Board** — uses BoardDocs (`go.boarddocs.com/ca/sfmta/Board.nsf`).
+  Different platform, separate scraper.
+- **Public hearing notices** — separate notice system.
+- **Pre-introduction drafts** — only formally introduced matters appear.
+- **Closed sessions** — non-public items are filtered server-side by
+  Legistar.
+
+### M12 substep order
+
+Cheapest / highest-confidence first so novel platforms don't block easy
+wins:
+
+1. **HPC scraper** — clone `planning.ts`, parameterize source slug + URL.
+2. **Legistar client smoke test** — single throwaway script hitting
+   `/Bodies` and `/Events` for SF, to confirm the instance is open and
+   the Events endpoint is healthy (a 2022 blog flagged it as broken;
+   needs verification before committing the path).
+3. **`scraper/lib/legistar.ts`** — typed client with pagination + OData
+   v3 + 1000-row handling.
+4. **`scraper/sources/bos-legistar.ts`** — replaces the Playwright BOS
+   scraper, automatically lights up Land Use & Transportation, Budget
+   & Finance, Rules, Public Safety, GAO, Joint City/School. Existing
+   `bos.ts` stays in tree until parity is verified for ~1 week, then
+   removed.
+5. **SFMTA Board scraper** — BoardDocs is a novel platform; do last so
+   it doesn't block the cheaper wins. Falls back to scraping
+   `sfmta.com` meeting pages if BoardDocs is hostile.
+
 ## Things to avoid
 
 - **Don't introduce a second copy of the closed enums.** Import from
@@ -252,6 +358,14 @@ npm run fetch:geo         # re-download SF neighborhood + district polygons
 - **Don't add a new entry to `NEIGHBORHOODS` without also updating
   `DATASF_TO_ENUM` in `scraper/lib/geo.ts`.** Otherwise polygon-derived
   neighborhoods will silently disagree with the closed enum.
+- **Don't build BOS-committee HTML scrapers** (M12+). Land Use &
+  Transportation, Budget & Finance, Rules, Public Safety, GAO, Joint
+  City/School are all served by the Legistar client. Adding a Playwright
+  scraper per committee duplicates work that the API already does.
+- **Don't store Legistar API responses in Storage.** Legistar is the
+  canonical store and is queryable by stable ID; mirror only the fields
+  we use into Postgres. Same principle as keeping event-page HTML
+  rather than agenda PDFs.
 - **Don't add error handling for cases that can't happen.** Trust framework
   guarantees; only validate at boundaries (LLM output, scraped HTML).
 - **Don't use `--no-verify` or skip hooks.**
