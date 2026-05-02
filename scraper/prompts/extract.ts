@@ -5,7 +5,7 @@ export const TOOL_NAME = 'record_agenda_items';
 
 export const SYSTEM_PROMPT = `You are an assistant that extracts structured data from San Francisco civic meeting agendas.
 
-Given the text of a Planning Commission hearing agenda, extract each agenda item and return structured data.
+Given the text of a San Francisco civic meeting agenda (Planning Commission, Board of Supervisors, or public hearing notice), extract each agenda item and return structured data.
 
 For each item identify:
 - position: item number or order on the agenda (integer)

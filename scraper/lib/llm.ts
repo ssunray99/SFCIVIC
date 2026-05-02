@@ -70,7 +70,7 @@ export async function extractAgendaItems(
       messages: [
         {
           role: 'user',
-          content: `Extract agenda items from this SF Planning Commission meeting.\n\nMeeting: ${meetingTitle}\n\nAgenda text:\n${text.slice(0, 50_000)}`,
+          content: `Extract agenda items from this San Francisco civic meeting.\n\nMeeting: ${meetingTitle}\n\nAgenda text:\n${text.slice(0, 50_000)}`,
         },
       ],
     });

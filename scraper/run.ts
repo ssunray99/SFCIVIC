@@ -1,15 +1,20 @@
 import { scrape as scrapePlanning, extractExisting as extractPlanning } from './sources/planning.ts';
+import { scrape as scrapeBos } from './sources/bos.ts';
+import { scrape as scrapeHearings } from './sources/hearings.ts';
 import { closeBrowser } from './lib/playwright.ts';
 
 // CLI usage:
 //   tsx scraper/run.ts                → scrape all sources
 //   tsx scraper/run.ts planning       → scrape Planning Commission only
+//   tsx scraper/run.ts bos            → scrape Board of Supervisors only
+//   tsx scraper/run.ts hearings       → scrape Public Hearing Notices only
 //   tsx scraper/run.ts extract        → run LLM extraction on unprocessed meetings
 const filter = process.argv[2]?.toLowerCase();
 
 const sources: Array<{ id: string; fn: () => Promise<void> }> = [
   { id: 'planning', fn: scrapePlanning },
-  // bos and hearings added in M4
+  { id: 'bos',      fn: scrapeBos },
+  { id: 'hearings', fn: scrapeHearings },
 ];
 
 async function main() {
