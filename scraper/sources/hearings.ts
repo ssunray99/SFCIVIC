@@ -46,30 +46,19 @@ export async function scrape(): Promise<void> {
       pageUrl: string;
     };
 
-    const entries: NoticeEntry[] = await page.evaluate((): NoticeEntry[] => {
-      const results: NoticeEntry[] = [];
-      const pageUrl = location.href;
+    // Collect raw DOM data in the browser; do date parsing in Node.js to
+    // avoid esbuild injecting __name() helpers into the evaluate string.
+    type RawRow = { text: string; title: string; pdfUrls: string[]; detailUrl: string | null };
+    type RawPdf = { href: string; linkText: string; context: string };
 
-      // Helper: parse "Month D, YYYY" or ISO date strings
-      function parseDate(text: string): string | null {
-        const m = text.match(
-          /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
-        );
-        if (m) {
-          const d = new Date(m[0]);
-          if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-        }
-        const iso = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
-        if (iso) return iso[1];
-        return null;
-      }
-
-      // Attempt 1: table rows (common Drupal views layout)
+    const { rawRows, rawPdfs, pageUrl } = await page.evaluate((): {
+      rawRows: RawRow[];
+      rawPdfs: RawPdf[];
+      pageUrl: string;
+    } => {
       const rows = Array.from(document.querySelectorAll('table tr, .views-row, .view-row'));
-
-      for (const row of rows) {
+      const rawRows: RawRow[] = rows.map((row) => {
         const text = (row as HTMLElement).innerText ?? '';
-        const hearingDate = parseDate(text);
         const pdfs = Array.from(row.querySelectorAll('a[href]'))
           .map((a) => (a as HTMLAnchorElement).href)
           .filter((h) => h.toLowerCase().endsWith('.pdf'));
@@ -78,35 +67,52 @@ export async function scrape(): Promise<void> {
           .find((h) => !h.toLowerCase().endsWith('.pdf') && h.includes('/permit/')) ?? null;
         const titleEl = row.querySelector('h2, h3, td:first-child, .views-field-title');
         const title = (titleEl as HTMLElement | null)?.innerText?.trim() ?? text.slice(0, 80);
+        return { text, title, pdfUrls: pdfs, detailUrl: detail };
+      }).filter((r) => r.pdfUrls.length > 0 || r.detailUrl !== null);
 
-        if (pdfs.length > 0 || detail) {
-          results.push({ title, hearingDate, pdfUrls: pdfs, detailUrl: detail, pageUrl });
-        }
-      }
-
-      // Attempt 2: if no rows found, collect all PDF links on the page with
-      // surrounding context for date extraction.
-      if (results.length === 0) {
-        for (const a of Array.from(document.querySelectorAll('a[href]'))) {
-          const href = (a as HTMLAnchorElement).href;
-          if (!href.toLowerCase().endsWith('.pdf')) continue;
-          // Look for a date in the nearby text (parent and siblings)
+      const rawPdfs: RawPdf[] = Array.from(document.querySelectorAll('a[href]'))
+        .filter((a) => (a as HTMLAnchorElement).href.toLowerCase().endsWith('.pdf'))
+        .map((a) => {
           const parent = a.closest('li, tr, div, p') ?? a.parentElement;
-          const context = (parent as HTMLElement | null)?.innerText ?? '';
-          const hearingDate = parseDate(context);
-          const title = (a.textContent ?? '').trim() || (href.split('/').pop() ?? '');
-          results.push({
-            title,
-            hearingDate,
-            pdfUrls: [href],
-            detailUrl: null,
-            pageUrl,
-          });
-        }
-      }
+          return {
+            href: (a as HTMLAnchorElement).href,
+            linkText: (a.textContent ?? '').trim(),
+            context: (parent as HTMLElement | null)?.innerText ?? '',
+          };
+        });
 
-      return results;
+      return { rawRows, rawPdfs, pageUrl: location.href };
     });
+
+    // Parse dates in Node.js using the same helper used elsewhere.
+    function parseDateFromText(text: string): string | null {
+      const m = text.match(
+        /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
+      );
+      if (m) {
+        const d = new Date(m[0]);
+        if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+      }
+      const iso = text.match(/\b(\d{4}-\d{2}-\d{2})\b/);
+      if (iso) return iso[1];
+      return null;
+    }
+
+    const entries: NoticeEntry[] = rawRows.length > 0
+      ? rawRows.map((r) => ({
+          title: r.title,
+          hearingDate: parseDateFromText(r.text),
+          pdfUrls: r.pdfUrls,
+          detailUrl: r.detailUrl,
+          pageUrl,
+        }))
+      : rawPdfs.map((r) => ({
+          title: r.linkText || (r.href.split('/').pop() ?? ''),
+          hearingDate: parseDateFromText(r.context),
+          pdfUrls: [r.href],
+          detailUrl: null,
+          pageUrl,
+        }));
 
     console.log(`[hearings] found ${entries.length} notice entrie(s) on the listing page`);
 
