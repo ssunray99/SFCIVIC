@@ -539,56 +539,33 @@ async function fetchLegislativeNotices(page: Page): Promise<Map<string, string>>
   try {
     await page.goto(NOTICES_URL, { waitUntil: 'networkidle', timeout: 45_000 });
 
-    type RawSection = { heading: string; content: string };
-    // Debug: snapshot page structure to understand heading elements
-    const debugInfo = await page.evaluate((): { allHeadings: string[]; bodySnippet: string } => {
-      const allHeadings = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,strong,b'))
-        .map((el) => `${el.tagName} | class="${el.className}" | text="${(el as HTMLElement).innerText?.slice(0, 80).replace(/\n/g, ' ')}"`)
-        .slice(0, 30);
-      const bodySnippet = document.body.innerText.slice(0, 500).replace(/\s+/g, ' ');
-      return { allHeadings, bodySnippet };
-    });
-    console.log('[planning:notices] page body snippet:', debugInfo.bodySnippet);
-    console.log('[planning:notices] heading elements found:');
-    debugInfo.allHeadings.forEach((h) => console.log(' ', h));
+    // Use full body text split by date lines — avoids fragile DOM sibling traversal.
+    const bodyText = await page.evaluate((): string => document.body.innerText);
 
-    const rawSections = await page.evaluate((): RawSection[] => {
-      const results: RawSection[] = [];
-      const headings = Array.from(
-        document.querySelectorAll('h2, h3, [class*="heading"], [class*="date"]'),
-      ).filter((el) =>
-        /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/i.test(
-          (el as HTMLElement).innerText ?? '',
-        ),
-      );
-      for (const heading of headings) {
-        const headingText = (heading as HTMLElement).innerText.replace(/\s+/g, ' ').trim();
-        let content = '';
-        let el = heading.nextElementSibling;
-        while (el) {
-          const tag = el.tagName.toUpperCase();
-          if (
-            (tag === 'H2' || tag === 'H3') &&
-            /\b(January|February|March|April|May|June|July|August|September|October|November|December)\b/i.test(
-              (el as HTMLElement).innerText ?? '',
-            )
-          ) break;
-          content += (el as HTMLElement).innerText + '\n';
-          el = el.nextElementSibling;
-        }
-        if (content.trim()) results.push({ heading: headingText, content: content.trim() });
-      }
-      return results;
-    });
+    const monthRe = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b/i;
+    const lines = bodyText.split('\n').map((l) => l.trim()).filter(Boolean);
 
-    for (const section of rawSections) {
-      const m = section.heading.match(
-        /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
-      );
-      if (!m) continue;
+    let currentHeading = '';
+    let currentLines: string[] = [];
+
+    const flush = (): void => {
+      if (!currentHeading || currentLines.length === 0) return;
+      const m = currentHeading.match(monthRe);
+      if (!m) return;
       const date = new Date(m[0]).toISOString().slice(0, 10);
-      map.set(date, `${section.heading}\n\n${section.content}`);
+      map.set(date, `${currentHeading}\n\n${currentLines.join('\n')}`);
+    };
+
+    for (const line of lines) {
+      if (monthRe.test(line)) {
+        flush();
+        currentHeading = line;
+        currentLines = [];
+      } else if (currentHeading) {
+        currentLines.push(line);
+      }
     }
+    flush();
   } catch (err) {
     console.warn('[planning] failed to fetch legislative notices, continuing without them:', err instanceof Error ? err.message : err);
   }
