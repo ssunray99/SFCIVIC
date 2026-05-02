@@ -29,6 +29,8 @@ export function MeetingCard({ meeting }: { meeting: MeetingCardData }) {
     const bp = b.position ?? Number.MAX_SAFE_INTEGER;
     return ap - bp;
   });
+  const today = new Date().toISOString().slice(0, 10);
+  const upcoming = meeting.meeting_date >= today;
 
   return (
     <section className="flex flex-col gap-4 rounded-lg border border-zinc-200 bg-zinc-50/50 p-5 dark:border-zinc-800 dark:bg-zinc-900/40">
@@ -62,7 +64,7 @@ export function MeetingCard({ meeting }: { meeting: MeetingCardData }) {
       {items.length > 0 ? (
         <div className="flex flex-col gap-2">
           {items.map((item) => (
-            <ItemCard key={item.id} item={item} />
+            <ItemCard key={item.id} item={item} meetingUpcoming={upcoming} />
           ))}
         </div>
       ) : (

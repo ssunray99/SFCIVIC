@@ -13,6 +13,11 @@ export type ExtractedItem = {
   district?: number | null;
   neighborhoods: Neighborhood[];
   topics: Topic[];
+  addresses: string[];
+  comment_deadline: string | null;   // ISO date or null
+  comment_email: string | null;
+  comment_portal_url: string | null;
+  in_person_slot: string | null;
 };
 
 let _client: Anthropic | null = null;
@@ -87,16 +92,21 @@ export async function extractAgendaItems(
     const items: ExtractedItem[] = rawItems
       .filter((x): x is Record<string, unknown> => typeof x === 'object' && x !== null)
       .map((x) => ({
-        position:      typeof x.position === 'number' ? x.position : null,
-        title:         String(x.title ?? '').trim(),
-        summary:       String(x.summary ?? '').trim(),
-        item_type:     validateItemType(x.item_type),
-        district:      typeof x.district === 'number' && x.district >= 1 && x.district <= 11
-                         ? x.district
-                         : null,
+        position:           typeof x.position === 'number' ? x.position : null,
+        title:              String(x.title ?? '').trim(),
+        summary:            String(x.summary ?? '').trim(),
+        item_type:          validateItemType(x.item_type),
+        district:           typeof x.district === 'number' && x.district >= 1 && x.district <= 11
+                              ? x.district
+                              : null,
         // Drop any tag not in the closed enum — guards against hallucination
-        neighborhoods: filterEnum(x.neighborhoods, NEIGHBORHOODS as unknown as string[]) as Neighborhood[],
-        topics:        filterEnum(x.topics, TOPICS as unknown as string[]) as Topic[],
+        neighborhoods:      filterEnum(x.neighborhoods, NEIGHBORHOODS as unknown as string[]) as Neighborhood[],
+        topics:             filterEnum(x.topics, TOPICS as unknown as string[]) as Topic[],
+        addresses:          stringArray(x.addresses),
+        comment_deadline:   validateIsoDate(x.comment_deadline),
+        comment_email:      nonEmptyString(x.comment_email),
+        comment_portal_url: nonEmptyString(x.comment_portal_url),
+        in_person_slot:     nonEmptyString(x.in_person_slot),
       }))
       .filter((item) => item.title.length > 0);
 
@@ -139,4 +149,25 @@ function validateItemType(v: unknown): ExtractedItem['item_type'] {
 function filterEnum(value: unknown, allowed: string[]): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((v): v is string => typeof v === 'string' && allowed.includes(v));
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((v): v is string => typeof v === 'string')
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+}
+
+function nonEmptyString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function validateIsoDate(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  // YYYY-MM-DD; reject everything else so we never insert garbage into a date column.
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
 }

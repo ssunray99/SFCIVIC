@@ -39,10 +39,82 @@ export type Database = {
   }
   public: {
     Tables: {
+      address_cache: {
+        Row: {
+          address_norm: string
+          created_at: string
+          lat: number | null
+          lng: number | null
+          source: string | null
+        }
+        Insert: {
+          address_norm: string
+          created_at?: string
+          lat?: number | null
+          lng?: number | null
+          source?: string | null
+        }
+        Update: {
+          address_norm?: string
+          created_at?: string
+          lat?: number | null
+          lng?: number | null
+          source?: string | null
+        }
+        Relationships: []
+      }
+      agenda_item_locations: {
+        Row: {
+          agenda_item_id: string
+          district: number | null
+          geocode_source: string | null
+          geocoded_at: string | null
+          id: string
+          lat: number | null
+          lng: number | null
+          neighborhood: string | null
+          raw_address: string
+        }
+        Insert: {
+          agenda_item_id: string
+          district?: number | null
+          geocode_source?: string | null
+          geocoded_at?: string | null
+          id?: string
+          lat?: number | null
+          lng?: number | null
+          neighborhood?: string | null
+          raw_address: string
+        }
+        Update: {
+          agenda_item_id?: string
+          district?: number | null
+          geocode_source?: string | null
+          geocoded_at?: string | null
+          id?: string
+          lat?: number | null
+          lng?: number | null
+          neighborhood?: string | null
+          raw_address?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agenda_item_locations_agenda_item_id_fkey"
+            columns: ["agenda_item_id"]
+            isOneToOne: false
+            referencedRelation: "agenda_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       agenda_items: {
         Row: {
+          comment_deadline: string | null
+          comment_email: string | null
+          comment_portal_url: string | null
           district: number | null
           id: string
+          in_person_slot: string | null
           item_type: string | null
           llm_extracted_at: string | null
           llm_model: string | null
@@ -56,8 +128,12 @@ export type Database = {
           topics: string[]
         }
         Insert: {
+          comment_deadline?: string | null
+          comment_email?: string | null
+          comment_portal_url?: string | null
           district?: number | null
           id?: string
+          in_person_slot?: string | null
           item_type?: string | null
           llm_extracted_at?: string | null
           llm_model?: string | null
@@ -71,8 +147,12 @@ export type Database = {
           topics?: string[]
         }
         Update: {
+          comment_deadline?: string | null
+          comment_email?: string | null
+          comment_portal_url?: string | null
           district?: number | null
           id?: string
+          in_person_slot?: string | null
           item_type?: string | null
           llm_extracted_at?: string | null
           llm_model?: string | null
