@@ -51,7 +51,7 @@ export async function scrape(): Promise<void> {
     await page.goto(MEETINGS_HUB, { waitUntil: 'networkidle', timeout: 45_000 });
 
     const committeeUrls = await page.evaluate(
-      (base: string, patterns: string[]): string[] => {
+      ({ base, patterns }: { base: string; patterns: string[] }): string[] => {
         function normalize(s: string): string {
           return s.toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, ' ').trim();
         }
@@ -72,8 +72,7 @@ export async function scrape(): Promise<void> {
         }
         return [...new Set(found)];
       },
-      BASE_URL,
-      TARGET_COMMITTEE_PATTERNS,
+      { base: BASE_URL, patterns: TARGET_COMMITTEE_PATTERNS },
     );
 
     console.log(`[bos] found ${committeeUrls.length} committee page(s)`);
@@ -108,7 +107,7 @@ export async function scrape(): Promise<void> {
 
         // Collect links that look like individual meeting detail pages.
         const links = await page.evaluate(
-          (base: string, year: number): string[] =>
+          ({ base, year }: { base: string; year: number }): string[] =>
             Array.from(document.querySelectorAll('a[href]'))
               .map((a) => (a as HTMLAnchorElement).href)
               .filter(
@@ -120,8 +119,7 @@ export async function scrape(): Promise<void> {
                   (href.includes(String(year)) ||
                     /\d{4}-\d{2}-\d{2}|agenda|meeting-\d/.test(href)),
               ),
-          BASE_URL,
-          scrapeYear,
+          { base: BASE_URL, year: scrapeYear },
         );
 
         const before = meetingUrls.size;
