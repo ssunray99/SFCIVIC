@@ -46,6 +46,10 @@ export async function scrape(): Promise<void> {
     const page = await ctx.newPage();
 
     // Discover committee page URLs by matching link text on the meetings hub.
+    // TODO: if sfbos.org uses ampersands ("Budget & Appropriations") instead of
+    // "and", this simple includes() match will miss them. Fix by normalising "&"
+    // to "and" and matching word-by-word. Skip for now; if committeeUrls comes
+    // back short, that's the likely cause.
     await page.goto(MEETINGS_HUB, { waitUntil: 'networkidle', timeout: 45_000 });
 
     const committeeUrls = await page.evaluate(
