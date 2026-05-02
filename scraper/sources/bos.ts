@@ -1,3 +1,4 @@
+import type { Page } from 'playwright';
 import { newContext, fetchBytes } from '../lib/playwright.ts';
 import { sha256 } from '../lib/hash.ts';
 import { extractPdfText } from '../lib/pdf.ts';
@@ -7,12 +8,24 @@ import { createAdminClient } from '@/lib/supabase/admin.ts';
 
 const SOURCE_ID = 'bos';
 const BASE_URL = 'https://sfbos.org';
-const MEETINGS_URL = `${BASE_URL}/meetings`;
+const MEETINGS_HUB = `${BASE_URL}/meetings`;
 // Only import meetings from this year onwards.
 const SCRAPE_FROM = `${new Date().getFullYear()}-01-01`;
 
 const MAX_TEXT_PER_PDF = 20_000;
+const MAX_TEXT_PER_RESOURCE = 80_000;
 const MAX_TEXT_TOTAL = 100_000;
+
+// Substring matches against link text on the meetings hub page.
+// Order matters: listed top-to-bottom as they appear on the page.
+const TARGET_COMMITTEE_PATTERNS = [
+  'Full Board',
+  'Budget and Appropriations',
+  'Land Use and Transportation',
+  'Government Audit and Oversight',
+  'Public Safety and Neighborhood Services',
+  'Downtown Revitalization',
+];
 
 export async function scrape(): Promise<void> {
   const supabase = createAdminClient();
@@ -32,48 +45,58 @@ export async function scrape(): Promise<void> {
     const ctx = await newContext();
     const page = await ctx.newPage();
 
-    // Visit the meetings hub to collect two sets of links in one pass:
-    //   1. sectionLinks — internal sub-pages to walk for meeting detail links
-    //   2. directMeetingLinks — links on this page that already look like meetings
-    await page.goto(MEETINGS_URL, { waitUntil: 'networkidle', timeout: 45_000 });
+    // Discover committee page URLs by matching link text on the meetings hub.
+    await page.goto(MEETINGS_HUB, { waitUntil: 'networkidle', timeout: 45_000 });
 
-    const scrapeYear = new Date().getFullYear();
-
-    const { sectionLinks, directMeetingLinks } = await page.evaluate(
-      (base: string, year: number): { sectionLinks: string[]; directMeetingLinks: string[] } => {
-        const all = Array.from(document.querySelectorAll('a[href]'))
-          .map((a) => (a as HTMLAnchorElement).href)
-          .filter(
-            (href) =>
-              href.startsWith(base + '/') &&
-              !href.includes('#') &&
-              !href.includes('?'),
+    const committeeUrls = await page.evaluate(
+      (base: string, patterns: string[]): string[] => {
+        const found: string[] = [];
+        for (const pattern of patterns) {
+          const match = Array.from(document.querySelectorAll('a[href]')).find((a) =>
+            (a.textContent ?? '').toLowerCase().includes(pattern.toLowerCase()),
           );
-
-        const looksLikeMeeting = (href: string) =>
-          href.includes(String(year)) || /agenda|meeting/i.test(href);
-
-        const direct = [...new Set(all.filter(looksLikeMeeting))];
-        const sections = [...new Set(all.filter((h) => !looksLikeMeeting(h)))];
-
-        return { sectionLinks: sections, directMeetingLinks: direct };
+          if (match) {
+            const href = (match as HTMLAnchorElement).href;
+            if (href.startsWith(base)) found.push(href);
+          }
+        }
+        return [...new Set(found)];
       },
       BASE_URL,
-      scrapeYear,
+      TARGET_COMMITTEE_PATTERNS,
     );
 
-    console.log(
-      `[bos] meetings hub: ${sectionLinks.length} section link(s), ` +
-        `${directMeetingLinks.length} direct meeting link(s)`,
-    );
+    console.log(`[bos] found ${committeeUrls.length} committee page(s)`);
 
-    // Seed the candidate set with any direct meeting links found on the hub.
-    const meetingUrls = new Set<string>(directMeetingLinks);
+    // Collect meeting detail URLs from each committee page.
+    const meetingUrls = new Set<string>();
+    const scrapeYear = new Date().getFullYear();
+    const monthNames = [
+      'January','February','March','April','May','June',
+      'July','August','September','October','November','December',
+    ];
 
-    // Walk each section page to collect additional meeting detail URLs.
-    for (const sectionUrl of sectionLinks.slice(0, 30)) {
-      try {
-        await page.goto(sectionUrl, { waitUntil: 'networkidle', timeout: 30_000 });
+    for (const committeeUrl of committeeUrls) {
+      console.log(`[bos] scanning committee: ${committeeUrl}`);
+
+      let pageNum = 0;
+      let firstPage = true;
+
+      while (true) {
+        const url =
+          firstPage
+            ? committeeUrl
+            : `${committeeUrl}${committeeUrl.includes('?') ? '&' : '?'}page=${pageNum}`;
+
+        try {
+          await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
+        } catch {
+          break;
+        }
+
+        if (firstPage) firstPage = false;
+
+        // Collect links that look like individual meeting detail pages.
         const links = await page.evaluate(
           (base: string, year: number): string[] =>
             Array.from(document.querySelectorAll('a[href]'))
@@ -81,114 +104,132 @@ export async function scrape(): Promise<void> {
               .filter(
                 (href) =>
                   href.startsWith(base + '/') &&
-                  (href.includes(String(year)) || /agenda|meeting/i.test(href)),
+                  !href.includes('#') &&
+                  // Meeting detail pages on sfbos.org typically contain a date
+                  // or the words "meeting" / "agenda" in the path.
+                  (href.includes(String(year)) ||
+                    /\d{4}-\d{2}-\d{2}|agenda|meeting-\d/.test(href)),
               ),
           BASE_URL,
           scrapeYear,
         );
+
+        const before = meetingUrls.size;
         for (const l of links) meetingUrls.add(l);
-      } catch {
-        // Section unavailable — skip silently.
+        const added = meetingUrls.size - before;
+        console.log(`[bos] committee page ${pageNum + 1}: ${added} new meeting link(s)`);
+
+        if (added === 0) break;
+
+        // Stop paginating once the page no longer shows the target year.
+        const hasTargetYear = await page.evaluate(
+          ({ year, months }: { year: number; months: string[] }) =>
+            months.some((m) => document.body.innerText.includes(`${m} ${year}`)),
+          { year: scrapeYear, months: monthNames },
+        );
+        if (!hasTargetYear) break;
+
+        const hasNext = await page.$('a[title="Go to next page"], a:has-text("Next page")');
+        if (!hasNext) break;
+        pageNum++;
       }
     }
 
-    // Drop the hub itself and obvious non-content URLs.
-    meetingUrls.delete(MEETINGS_URL);
-    for (const u of [...meetingUrls]) {
-      if (u.endsWith('/meetings') || /\.(pdf|jpg|png|gif|css|js)$/i.test(u)) {
-        meetingUrls.delete(u);
-      }
-    }
-
-    console.log(`[bos] ${meetingUrls.size} candidate meeting URL(s) to inspect`);
+    console.log(`[bos] ${meetingUrls.size} meeting URL(s) to process`);
 
     for (const meetingUrl of meetingUrls) {
       itemsFound++;
-      console.log(`[bos] visiting: ${meetingUrl}`);
+      console.log(`[bos] visiting meeting: ${meetingUrl}`);
 
-      let meetingDate: string | null = null;
-      let title = '';
-      let agendaText = '';
-      let eventHtml = '';
+      await page.goto(meetingUrl, { waitUntil: 'networkidle', timeout: 30_000 });
 
-      try {
-        await page.goto(meetingUrl, { waitUntil: 'networkidle', timeout: 30_000 });
-
-        meetingDate = await page.evaluate((): string | null => {
-          const time = document.querySelector('time[datetime]');
-          if (time) {
-            const dt = (time as HTMLTimeElement).dateTime;
-            if (dt) return dt.slice(0, 10);
-          }
-          const text = document.body.innerText;
-          const m = text.match(
-            /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
-          );
-          if (m) {
-            const d = new Date(m[0]);
-            if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
-          }
-          return null;
-        });
-
-        if (meetingDate && meetingDate < SCRAPE_FROM) {
-          console.log(`[bos] skipping pre-${SCRAPE_FROM} meeting (${meetingDate})`);
-          continue;
+      const meetingDate = await page.evaluate((): string | null => {
+        const time = document.querySelector('time[datetime]');
+        if (time) {
+          const dt = (time as HTMLTimeElement).dateTime;
+          if (dt) return dt.slice(0, 10);
         }
-
-        title = await page.evaluate(
-          () =>
-            document.querySelector('h1')?.textContent?.replace(/\s+/g, ' ').trim() ??
-            'SF Board of Supervisors Meeting',
+        const text = document.body.innerText;
+        const m = text.match(
+          /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i,
         );
-
-        // Find PDF links on the meeting page.
-        const pdfLinks = await page.evaluate((): string[] =>
-          [
-            ...new Set(
-              Array.from(document.querySelectorAll('a[href]'))
-                .map((a) => (a as HTMLAnchorElement).href)
-                .filter((h) => h.toLowerCase().endsWith('.pdf')),
-            ),
-          ],
-        );
-
-        eventHtml = await page.content();
-        agendaText = htmlToText(eventHtml);
-
-        for (const pdfUrl of pdfLinks.slice(0, 8)) {
-          if (agendaText.length >= MAX_TEXT_TOTAL) break;
-          try {
-            const { bytes } = await fetchBytes(pdfUrl);
-            const r = await extractPdfText(bytes);
-            if (r.text) {
-              const label = pdfUrl.split('/').pop() ?? pdfUrl;
-              agendaText += `\n--- ${label} ---\n${r.text.slice(0, MAX_TEXT_PER_PDF)}`;
-            }
-          } catch (err) {
-            console.warn(
-              `[bos] PDF fetch failed ${pdfUrl}:`,
-              err instanceof Error ? err.message : err,
-            );
-          }
+        if (m) {
+          const d = new Date(m[0]);
+          if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
         }
-      } catch (err) {
-        console.warn(
-          `[bos] page load failed ${meetingUrl}:`,
-          err instanceof Error ? err.message : err,
-        );
+        return null;
+      });
+
+      if (meetingDate && meetingDate < SCRAPE_FROM) {
+        console.log(`[bos] skipping pre-${SCRAPE_FROM} meeting (${meetingDate})`);
         continue;
       }
 
+      const title = await page.evaluate(
+        () =>
+          document.querySelector('h1')?.textContent?.replace(/\s+/g, ' ').trim() ??
+          'SF Board of Supervisors Meeting',
+      );
+
+      // Find Agenda and Minutes links by their visible text, same pattern as
+      // the Planning Commission scraper.
+      const sectionLinks = await page.evaluate((): {
+        agenda: string | null;
+        minutes: string | null;
+      } => {
+        const out = { agenda: null as string | null, minutes: null as string | null };
+        for (const a of Array.from(document.querySelectorAll('a[href]'))) {
+          const href = (a as HTMLAnchorElement).href;
+          const text = (a.textContent ?? '').trim().toLowerCase();
+          if (!out.agenda && text === 'agenda') out.agenda = href;
+          if (!out.minutes && text === 'minutes') out.minutes = href;
+        }
+        return out;
+      });
+
+      // Snapshot the meeting page HTML before navigating away.
+      const eventHtml = await page.content();
+
+      // Past meetings: Agenda + Minutes.  Future meetings: Agenda only.
+      const today = new Date().toISOString().slice(0, 10);
+      const isPast = !!meetingDate && meetingDate < today;
+
+      let agendaText = '';
+
+      if (sectionLinks.agenda) {
+        console.log(`[bos] agenda link: ${sectionLinks.agenda}`);
+        const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_PER_RESOURCE);
+        agendaText += r.text;
+      }
+
+      if (isPast && sectionLinks.minutes && agendaText.length < MAX_TEXT_TOTAL) {
+        console.log(`[bos] minutes link: ${sectionLinks.minutes}`);
+        const remaining = MAX_TEXT_TOTAL - agendaText.length;
+        const r = await gatherTextFromLink(
+          page,
+          sectionLinks.minutes,
+          Math.min(MAX_TEXT_PER_RESOURCE, remaining),
+        );
+        if (r.text) agendaText += `\n\n======== MINUTES ========\n\n${r.text}`;
+      }
+
+      // Fall back to event-page text if links yielded nothing.
+      if (!agendaText.trim()) agendaText = htmlToText(eventHtml);
+
       agendaText = agendaText.slice(0, MAX_TEXT_TOTAL);
       const needsOcr = agendaText.trim().length < 200;
-      if (needsOcr) console.warn(`[bos] needs OCR or too short: ${meetingUrl}`);
+      if (needsOcr) console.warn(`[bos] needs OCR: ${meetingUrl}`);
+
+      // agenda_url: for past meetings use the event page (user can navigate to
+      // both Agenda and Minutes); for future use the agenda link if available.
+      const sourceUrl = isPast
+        ? meetingUrl
+        : (sectionLinks.agenda ?? meetingUrl);
 
       const bytes = Buffer.from(eventHtml);
       const contentHash = sha256(bytes);
       const date = meetingDate ?? new Date().toISOString().slice(0, 10);
-      const externalId =
-        meetingUrl.replace(BASE_URL + '/', '').replace(/\//g, '-') || null;
+      const externalId = meetingUrl.split('/').filter(Boolean).pop() ?? null;
 
       const { data: existing } = await supabase
         .from('meetings')
@@ -221,7 +262,7 @@ export async function scrape(): Promise<void> {
         external_id: externalId,
         title: fullTitle,
         meeting_date: date,
-        agenda_url: meetingUrl,
+        agenda_url: sourceUrl,
         raw_storage_path: rawStoragePath,
         content_hash: contentHash,
         needs_ocr: needsOcr,
@@ -271,6 +312,69 @@ export async function scrape(): Promise<void> {
       .update({ status: 'error', finished_at: new Date().toISOString(), error: msg })
       .eq('id', runId);
     throw err;
+  }
+}
+
+/**
+ * Fetch text from a BOS link, which may be a direct PDF or an HTML page
+ * that lists linked PDFs (same dual-mode logic as the Planning scraper).
+ */
+async function gatherTextFromLink(
+  page: Page,
+  url: string,
+  maxChars: number,
+): Promise<{ text: string }> {
+  if (url.toLowerCase().endsWith('.pdf')) {
+    try {
+      const { bytes } = await fetchBytes(url);
+      const r = await extractPdfText(bytes);
+      return { text: r.text.slice(0, maxChars) };
+    } catch (err) {
+      console.warn(`[bos] PDF fetch failed ${url}:`, err instanceof Error ? err.message : err);
+      return { text: '' };
+    }
+  }
+
+  // HTML page — visit it, extract page text, then download any linked PDFs.
+  try {
+    await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
+    const html = await page.content();
+    const parts: string[] = [htmlToText(html)];
+    let totalLen = parts[0].length;
+
+    const pdfLinks = await page.evaluate((): string[] =>
+      [
+        ...new Set(
+          Array.from(document.querySelectorAll('a[href]'))
+            .map((a) => (a as HTMLAnchorElement).href)
+            .filter((h) => h.toLowerCase().endsWith('.pdf')),
+        ),
+      ],
+    );
+
+    for (const pdfUrl of pdfLinks.slice(0, 8)) {
+      if (totalLen >= maxChars) break;
+      try {
+        const { bytes } = await fetchBytes(pdfUrl);
+        const r = await extractPdfText(bytes);
+        if (r.text) {
+          const label = pdfUrl.split('/').pop() ?? pdfUrl;
+          const block = `\n--- ${label} ---\n${r.text.slice(0, MAX_TEXT_PER_PDF)}`;
+          parts.push(block);
+          totalLen += block.length;
+        }
+      } catch (err) {
+        console.warn(
+          `[bos] PDF fetch/parse failed ${pdfUrl}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
+    return { text: parts.join('\n').slice(0, maxChars) };
+  } catch (err) {
+    console.warn(`[bos] page fetch failed ${url}:`, err instanceof Error ? err.message : err);
+    return { text: '' };
   }
 }
 
