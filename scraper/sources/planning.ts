@@ -8,6 +8,10 @@ import { createAdminClient } from '@/lib/supabase/admin.ts';
 
 const SOURCE_ID = 'planning';
 const GRID_URL = 'https://sfplanning.org/hearings-cpc-grid';
+// Only import meetings from this year onwards. Past years are excluded both
+// during grid pagination (stop when year disappears from the page) and when
+// inserting each event (skip if meeting_date is before Jan 1 of this year).
+const SCRAPE_FROM = `${new Date().getFullYear()}-01-01`;
 
 // Per-meeting text budget when feeding the LLM.
 const MAX_PDFS_PER_RESOURCE = 12;
@@ -33,13 +37,83 @@ export async function scrape(): Promise<void> {
     const ctx = await newContext();
     const page = await ctx.newPage();
 
-    // Collect event URLs from all pages of the grid
+    // Collect event URLs. The grid defaults to "Upcoming Hearings"; we switch
+    // it to show all hearings (the "- Any -" option) so past meetings in the
+    // current year are included. We also switch sort to Descending so that the
+    // most recent meetings appear first and we can stop once we pass Jan 1.
     const eventUrls = new Set<string>();
+
+    await page.goto(GRID_URL, { waitUntil: 'networkidle', timeout: 45_000 });
+
+    // Switch the timing filter to "all" and sort to descending, then Apply.
+    // If the selects aren't found the page stays in its default state and we
+    // fall back to upcoming-only behaviour — no harm done.
+    const filterApplied = await page.evaluate((): boolean => {
+      let changed = false;
+
+      for (const sel of Array.from(document.querySelectorAll('select'))) {
+        const opts = Array.from(sel.options);
+
+        // Timing filter: switch from "Upcoming Hearings" to "- Any -" / "All"
+        if (opts.some((o) => /upcoming/i.test(o.text))) {
+          const any =
+            opts.find((o) => /any/i.test(o.text)) ??
+            opts.find((o) => /all/i.test(o.text)) ??
+            opts.find((o) => o.value === '');
+          if (any && any.value !== sel.value) {
+            sel.value = any.value;
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+            changed = true;
+          }
+        }
+
+        // Sort filter: switch from "Ascending" to "Descending" so newest
+        // events come first and we can stop once the year rolls back.
+        if (opts.some((o) => /ascending/i.test(o.text))) {
+          const desc = opts.find((o) => /descending/i.test(o.text));
+          if (desc && desc.value !== sel.value) {
+            sel.value = desc.value;
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+            changed = true;
+          }
+        }
+      }
+
+      return changed;
+    });
+
+    if (filterApplied) {
+      // Click the Apply/APPLY button and wait for the filtered results.
+      await Promise.all([
+        page.waitForLoadState('networkidle', { timeout: 45_000 }),
+        page.click(
+          'input[type="submit"][value="Apply"], ' +
+          'input[type="submit"][value="APPLY"], ' +
+          'button[type="submit"]',
+        ),
+      ]);
+      console.log(`[planning] switched grid to all-hearings descending (${page.url()})`);
+    } else {
+      console.warn('[planning] could not switch grid filter — using upcoming-only default');
+    }
+
+    // Paginate through the (now filtered + sorted) grid. Since the sort is
+    // descending, newest meetings are first. Stop once a page shows no dates
+    // from SCRAPE_FROM's year — that means we've scrolled past the year boundary.
+    const scrapeYear = Number(SCRAPE_FROM.slice(0, 4));
     let pageNum = 0;
+    let firstPage = true;
+
     while (true) {
-      const url = pageNum === 0 ? GRID_URL : `${GRID_URL}?page=${pageNum}`;
-      console.log(`[planning] fetching grid page ${pageNum + 1}: ${url}`);
-      await page.goto(url, { waitUntil: 'networkidle', timeout: 45_000 });
+      if (!firstPage) {
+        const sep = page.url().includes('?') ? '&' : '?';
+        const url = `${page.url()}${sep}page=${pageNum}`;
+        console.log(`[planning] fetching grid page ${pageNum + 1}: ${url}`);
+        await page.goto(url, { waitUntil: 'networkidle', timeout: 45_000 });
+      } else {
+        console.log(`[planning] fetching grid page 1 (already loaded)`);
+        firstPage = false;
+      }
 
       const hrefs = await page.evaluate(() =>
         Array.from(document.querySelectorAll('a[href]'))
@@ -53,6 +127,18 @@ export async function scrape(): Promise<void> {
       console.log(`[planning] grid page ${pageNum + 1}: ${added} new event(s) (${eventUrls.size} total)`);
 
       if (added === 0) break;
+
+      // Stop if this page contains no text from the target year — we've
+      // scrolled past the Jan 1 boundary into the prior year.
+      const hasTargetYear = await page.evaluate(
+        (year: number) => new RegExp(`\\b${year}\\b`).test(document.body.innerText),
+        scrapeYear,
+      );
+      if (!hasTargetYear) {
+        console.log(`[planning] no ${scrapeYear} events visible — stopping grid pagination`);
+        break;
+      }
+
       const hasNext = await page.$('a[title="Go to next page"], a:has-text("Next page")');
       if (!hasNext) break;
       pageNum++;
@@ -82,6 +168,13 @@ export async function scrape(): Promise<void> {
         }
         return null;
       });
+
+      // Skip meetings outside the target year — may appear on the last
+      // paginated grid page which can straddle the year boundary.
+      if (meetingDate && meetingDate < SCRAPE_FROM) {
+        console.log(`[planning] skipping pre-${SCRAPE_FROM} meeting (${meetingDate})`);
+        continue;
+      }
 
       const title = await page.evaluate(
         (): string =>
