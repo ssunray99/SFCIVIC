@@ -156,7 +156,7 @@ export async function scrape(): Promise<void> {
         .from('meetings')
         .select('id')
         .eq('source_id', SOURCE_ID)
-        .eq('content_hash', contentHash)
+        .or(`content_hash.eq.${contentHash},external_id.eq.${externalId}`)
         .maybeSingle();
 
       if (existing) {
