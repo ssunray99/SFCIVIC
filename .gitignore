@@ -40,6 +40,12 @@ yarn-error.log*
 *.local.pdf
 *.local.html
 
+# local-only dev state (Claude Code worktrees + agent settings, supabase CLI cache,
+# one-off test scripts that aren't part of production)
+/.claude/
+/supabase/.temp/
+/scripts/
+
 # vercel
 .vercel
 

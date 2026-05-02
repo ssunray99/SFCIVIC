@@ -3,7 +3,8 @@ import { newContext, fetchBytes } from '../lib/playwright.ts';
 import { sha256 } from '../lib/hash.ts';
 import { extractPdfText } from '../lib/pdf.ts';
 import { uploadRaw } from '../lib/storage.ts';
-import { extractAgendaItems, htmlToText } from '../lib/llm.ts';
+import { htmlToText } from '../lib/llm.ts';
+import { persistExtractedItems } from '../lib/extract-pipeline.ts';
 import { createAdminClient } from '@/lib/supabase/admin.ts';
 
 const SOURCE_ID = 'planning';
@@ -601,40 +602,11 @@ async function fetchLegislativeNotices(page: Page): Promise<Map<string, string>>
   return map;
 }
 
-type SupabaseClient = ReturnType<typeof createAdminClient>;
-
 async function runLlmExtraction(
-  supabase: SupabaseClient,
+  supabase: ReturnType<typeof createAdminClient>,
   meetingId: string,
   meetingTitle: string,
   agendaText: string,
 ): Promise<void> {
-  console.log(`[llm] extracting items for meeting ${meetingId}`);
-  const { items, promptVersion, model } = await extractAgendaItems(agendaText, meetingTitle);
-
-  if (items.length === 0) {
-    console.log(`[llm] no items extracted for ${meetingId}`);
-    return;
-  }
-
-  const rows = items.map((item) => ({
-    meeting_id: meetingId,
-    position: item.position ?? null,
-    title: item.title,
-    summary: item.summary,
-    item_type: item.item_type,
-    district: item.district ?? null,
-    neighborhoods: item.neighborhoods,
-    topics: item.topics,
-    llm_model: model,
-    prompt_version: promptVersion,
-    llm_extracted_at: new Date().toISOString(),
-  }));
-
-  const { error } = await supabase.from('agenda_items').insert(rows);
-  if (error) {
-    console.error(`[llm] insert failed for ${meetingId}:`, error.message);
-  } else {
-    console.log(`[llm] ✓ inserted ${rows.length} agenda item(s) for ${meetingId}`);
-  }
+  await persistExtractedItems(supabase, meetingId, meetingTitle, agendaText);
 }
