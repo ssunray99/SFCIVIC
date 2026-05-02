@@ -1,7 +1,19 @@
+import { Suspense } from 'react';
 import { createServerClient } from '@/lib/supabase/server';
 import { MeetingCard, type MeetingCardData } from '@/components/MeetingCard';
+import { FilterBar } from '@/components/FilterBar';
+import {
+  NEIGHBORHOODS,
+  TOPICS,
+  DISTRICTS,
+  SOURCES,
+  type Neighborhood,
+  type Topic,
+  type District,
+  type SourceId,
+} from '@/lib/constants';
 
-export const revalidate = 300; // re-fetch from Supabase at most every 5 minutes
+export const revalidate = 300;
 
 const SELECT = `
   id,
@@ -22,42 +34,92 @@ const SELECT = `
   )
 `;
 
-async function getMeetings(): Promise<{
+type Filters = {
+  neighborhood: Neighborhood | undefined;
+  topic: Topic | undefined;
+  district: District | undefined;
+  source: SourceId | undefined;
+};
+
+function parseFilters(raw: Record<string, string | string[] | undefined>): Filters {
+  const str = (k: string) => (typeof raw[k] === 'string' ? (raw[k] as string) : undefined);
+
+  const neighborhood = str('neighborhood');
+  const topic = str('topic');
+  const districtRaw = str('district');
+  const source = str('source');
+  const districtNum = districtRaw !== undefined ? Number(districtRaw) : NaN;
+
+  return {
+    neighborhood: (NEIGHBORHOODS as readonly string[]).includes(neighborhood ?? '')
+      ? (neighborhood as Neighborhood)
+      : undefined,
+    topic: (TOPICS as readonly string[]).includes(topic ?? '') ? (topic as Topic) : undefined,
+    district: DISTRICTS.includes(districtNum as District) ? (districtNum as District) : undefined,
+    source: SOURCES.some((s) => s.id === source) ? (source as SourceId) : undefined,
+  };
+}
+
+function applyItemFilters(meetings: MeetingCardData[], filters: Filters): MeetingCardData[] {
+  const { neighborhood, topic, district } = filters;
+  if (!neighborhood && !topic && district === undefined) return meetings;
+
+  return meetings.filter((m) => {
+    const items = m.agenda_items;
+    if (neighborhood && !items.some((i) => i.neighborhoods.includes(neighborhood))) return false;
+    if (topic && !items.some((i) => i.topics.includes(topic))) return false;
+    if (district !== undefined && !items.some((i) => i.district === district)) return false;
+    return true;
+  });
+}
+
+const hasFilters = (f: Filters) =>
+  f.neighborhood !== undefined || f.topic !== undefined || f.district !== undefined || f.source !== undefined;
+
+async function getMeetings(filters: Filters): Promise<{
   upcoming: MeetingCardData[];
   past: MeetingCardData[];
 }> {
   const supabase = createServerClient();
   const today = new Date().toISOString().slice(0, 10);
+  const filtered = hasFilters(filters);
+
+  const base = () => {
+    let q = supabase.from('meetings').select(SELECT);
+    if (filters.source) q = q.eq('source_id', filters.source);
+    return q;
+  };
 
   const [upcoming, past] = await Promise.all([
-    // Upcoming: today onwards, soonest first
-    supabase
-      .from('meetings')
-      .select(SELECT)
+    base()
       .gte('meeting_date', today)
       .order('meeting_date', { ascending: true })
-      .limit(50),
-    // Past: before today, most recent first
-    supabase
-      .from('meetings')
-      .select(SELECT)
+      .limit(filtered ? 200 : 50),
+    base()
       .lt('meeting_date', today)
       .order('meeting_date', { ascending: false })
-      .limit(25),
+      .limit(filtered ? 200 : 25),
   ]);
 
   if (upcoming.error) console.error('[page] upcoming query failed:', upcoming.error.message);
   if (past.error) console.error('[page] past query failed:', past.error.message);
 
   return {
-    upcoming: (upcoming.data ?? []) as MeetingCardData[],
-    past: (past.data ?? []) as MeetingCardData[],
+    upcoming: applyItemFilters((upcoming.data ?? []) as MeetingCardData[], filters),
+    past: applyItemFilters((past.data ?? []) as MeetingCardData[], filters),
   };
 }
 
-export default async function Home() {
-  const { upcoming, past } = await getMeetings();
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const raw = await searchParams;
+  const filters = parseFilters(raw);
+  const { upcoming, past } = await getMeetings(filters);
   const total = upcoming.length + past.length;
+  const isFiltered = hasFilters(filters);
 
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-12">
@@ -70,9 +132,21 @@ export default async function Home() {
         </p>
       </header>
 
-      {total === 0 ? (
+      <Suspense>
+        <FilterBar />
+      </Suspense>
+
+      {total === 0 && !isFiltered ? (
         <p className="rounded-md border border-dashed border-zinc-300 px-4 py-6 text-sm text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
           No meetings stored yet. Run <code>npm run scrape</code> to populate the database.
+        </p>
+      ) : total === 0 ? (
+        <p className="rounded-md border border-dashed border-zinc-300 px-4 py-6 text-sm text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+          No meetings match the current filters.{' '}
+          <a href="/" className="underline">
+            Clear filters
+          </a>{' '}
+          to see all meetings.
         </p>
       ) : (
         <>
@@ -82,7 +156,7 @@ export default async function Home() {
               <span className="text-xs text-zinc-500">{upcoming.length}</span>
             </div>
             {upcoming.length === 0 ? (
-              <p className="text-sm text-zinc-500">No upcoming meetings on file.</p>
+              <p className="text-sm text-zinc-500">No upcoming meetings match the current filters.</p>
             ) : (
               <div className="flex flex-col gap-4">
                 {upcoming.map((m) => (
@@ -92,17 +166,21 @@ export default async function Home() {
             )}
           </section>
 
-          {past.length > 0 && (
+          {(past.length > 0 || isFiltered) && (
             <section className="flex flex-col gap-4">
               <div className="flex items-baseline justify-between">
                 <h2 className="text-lg font-medium">Past meetings</h2>
                 <span className="text-xs text-zinc-500">{past.length}</span>
               </div>
-              <div className="flex flex-col gap-4">
-                {past.map((m) => (
-                  <MeetingCard key={m.id} meeting={m} />
-                ))}
-              </div>
+              {past.length === 0 ? (
+                <p className="text-sm text-zinc-500">No past meetings match the current filters.</p>
+              ) : (
+                <div className="flex flex-col gap-4">
+                  {past.map((m) => (
+                    <MeetingCard key={m.id} meeting={m} />
+                  ))}
+                </div>
+              )}
             </section>
           )}
         </>
