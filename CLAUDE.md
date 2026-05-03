@@ -27,8 +27,7 @@ Legistar Web API was dropped after a smoke test — see "Legistar API status
 (M12 step 2 — closed: API not viable)" below. M13 adds browse-by-neighborhood
 / topic pages. M14 (cross-committee project tracking) is **blocked pending
 a new data source** since Legistar's Matters graph is unavailable. M15
-covers analytics and supervisor accountability views. M9 (Vercel deploy)
-is unstarted. See "Planned architecture (M11–M15)" near the bottom of this
+covers analytics and supervisor accountability views. M9 (Vercel deploy) is complete. See "Planned architecture (M11–M15)" near the bottom of this
 file for data-model and ingestion-path decisions.
 
 ## Stack

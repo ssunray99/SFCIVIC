@@ -23,13 +23,13 @@ Districts polygons. Per-item action fields (written-comment deadline, email,
 portal, in-person slot) are surfaced as a "Take action by {date}" CTA on
 upcoming items.
 
-**M11 complete.** An address search box lets users type any SF address;
-`/api/locate` geocodes it via Nominatim and resolves it to a neighborhood
-and supervisor district, both applied as filters. **M12 BOS committees
-complete.** HPC scraper shipped earlier; five standing committee scrapers
-(Land Use, Budget, Rules, Public Safety, GAO) now run daily alongside the
-Full Board scraper via a shared `bos-shared.ts` module. SFMTA Board
-(BoardDocs) is the remaining M12 item. M13 adds browse-by-neighborhood /
+**M9 complete.** Site is live on Vercel. **M11 complete.** An address
+search box lets users type any SF address; `/api/locate` geocodes it via
+Nominatim and resolves it to a neighborhood and supervisor district, both
+applied as filters. **M12 BOS committees complete.** HPC scraper shipped
+earlier; five standing committee scrapers (Land Use, Budget, Rules, Public
+Safety, GAO) now run daily alongside the Full Board scraper via a shared
+`bos-shared.ts` module. SFMTA Board (BoardDocs) is the remaining M12 item. M13 adds browse-by-neighborhood /
 browse-by-topic pages. M14 (cross-committee project tracking) is **blocked
 pending a new data source** since Legistar's `Matters` graph is unavailable.
 M15 covers analytics and supervisor accountability views.
@@ -44,7 +44,7 @@ M15 covers analytics and supervisor accountability views.
 | M6  | Filters & search                                                  | ✅    |
 | M7  | Detail pages + about                                              | ✅    |
 | M8  | GitHub Actions cron                                               | ✅    |
-| M9  | Vercel deploy                                                     | ⬜    |
+| M9  | Vercel deploy                                                     | ✅    |
 | M10 | Address geocoding + implicit neighborhoods + action layer         | ✅    |
 | M11 | Address search UI (foreground for users)                          | ✅    |
 | M12 | Source expansion (HPC ✅, BOS committees ✅, SFMTA ⬜)             | 🔄    |
