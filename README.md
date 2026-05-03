@@ -23,17 +23,17 @@ Districts polygons. Per-item action fields (written-comment deadline, email,
 portal, in-person slot) are surfaced as a "Take action by {date}" CTA on
 upcoming items.
 
-**What's next.** M11 puts address search in front of users. M12 expands the
-source list significantly: a Historic Preservation Commission scraper
-(clones the Planning pattern), a **Legistar Web API client** that
-automatically lights up the Board of Supervisors + every standing committee
-(Land Use & Transportation, Budget & Finance, Rules, Public Safety, GAO,
-Joint City/School) and replaces the Playwright BOS scraper, and an SFMTA
-Board scraper. M13 adds browse-by-neighborhood / browse-by-topic pages.
-M14 layers project tracking on Legistar's `Matters` resource — each
-ordinance/resolution becomes a first-class object with sponsors, status,
-and a history timeline across committees. M15 covers analytics and
-supervisor accountability views.
+**What's next.** M11 puts address search in front of users. M12 expands
+the source list with Playwright scrapers: a Historic Preservation
+Commission scraper (clones the Planning pattern), per-committee BOS
+scrapers (Land Use & Transportation, Budget & Finance, Rules, Public
+Safety, GAO), and an SFMTA Board scraper. The original plan to use SF's
+Legistar Web API was dropped after smoke-testing revealed it's
+non-viable for SF (frozen Matters data, broken Histories and Events
+endpoints — see `CLAUDE.md` for details). M13 adds browse-by-neighborhood
+/ browse-by-topic pages. M14 (cross-committee project tracking) is
+**blocked pending a new data source** since Legistar's `Matters` graph
+is unavailable. M15 covers analytics and supervisor accountability views.
 
 | M   | Goal                                                              | State |
 | --- | ----------------------------------------------------------------- | ----- |
@@ -48,9 +48,9 @@ supervisor accountability views.
 | M9  | Vercel deploy                                                     | ⬜    |
 | M10 | Address geocoding + implicit neighborhoods + action layer         | ✅    |
 | M11 | Address search UI (foreground for users)                          | ⬜    |
-| M12 | Source expansion (HPC, Legistar API, BOS committees, SFMTA)       | ⬜    |
+| M12 | Source expansion (HPC, BOS committees, SFMTA — all Playwright)    | ⬜    |
 | M13 | Browse-by-neighborhood / browse-by-topic pages                    | ⬜    |
-| M14 | Project tracking on Legistar Matters                              | ⬜    |
+| M14 | Project tracking — blocked, needs new data source                 | ⬜    |
 | M15 | Supervisor accountability + analytics                             | ⬜    |
 
 Architectural detail for M11–M15 lives in `CLAUDE.md` under "Planned
