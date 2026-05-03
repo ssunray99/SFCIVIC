@@ -70,6 +70,7 @@ export type ItemType = (typeof ITEM_TYPES)[number];
 export const SOURCES = [
   { id: 'planning', name: 'SF Planning Commission' },
   { id: 'bos', name: 'SF Board of Supervisors' },
+  { id: 'hpc', name: 'SF Historic Preservation Commission' },
   { id: 'hearings', name: 'SF Public Hearing Notices' },
 ] as const;
 export type SourceId = (typeof SOURCES)[number]['id'];

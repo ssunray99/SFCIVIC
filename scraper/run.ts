@@ -1,17 +1,20 @@
 import { scrape as scrapePlanning, extractExisting as extractPlanning } from './sources/planning.ts';
 import { scrape as scrapeBos } from './sources/bos.ts';
+import { scrape as scrapeHpc, extractExisting as extractHpc } from './sources/hpc.ts';
 import { closeBrowser } from './lib/playwright.ts';
 
 // CLI usage:
 //   tsx scraper/run.ts                → scrape all sources
 //   tsx scraper/run.ts planning       → scrape Planning Commission only
 //   tsx scraper/run.ts bos            → scrape Board of Supervisors only
+//   tsx scraper/run.ts hpc            → scrape Historic Preservation Commission only
 //   tsx scraper/run.ts extract        → run LLM extraction on unprocessed meetings
 const filter = process.argv[2]?.toLowerCase();
 
 const sources: Array<{ id: string; fn: () => Promise<void> }> = [
   { id: 'planning', fn: scrapePlanning },
   { id: 'bos',      fn: scrapeBos },
+  { id: 'hpc',      fn: scrapeHpc },
 ];
 
 async function main() {
@@ -19,6 +22,7 @@ async function main() {
   if (filter === 'extract') {
     console.log('\n=== LLM extraction pass ===');
     await extractPlanning();
+    await extractHpc();
     console.log('\nAll done.');
     return;
   }

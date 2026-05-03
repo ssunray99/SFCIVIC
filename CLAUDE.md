@@ -275,8 +275,10 @@ Sources fall into two patterns. Both end at the same persistence step
   OData v3. M12 introduces `scraper/lib/legistar.ts` (typed client,
   handles paging + the 1000-row cap + OData filter syntax) and
   `scraper/sources/bos-legistar.ts` that walks every Body of type
-  `Primary Legislative Body` and `Standing Committee`, then their
-  Events, then `Events/{id}?EventItems=1`. The legacy
+  `Primary Legislative Body` and `Committee` (verified via smoke test —
+  SF stores standing committees as plain `Committee`, not the
+  `Standing Committee` value used by other Legistar deployments), then
+  their Events, then `Events/{id}?EventItems=1`. The legacy
   `scraper/sources/bos.ts` Playwright scraper is removed once parity is
   verified.
 
@@ -327,10 +329,12 @@ Cheapest / highest-confidence first so novel platforms don't block easy
 wins:
 
 1. **HPC scraper** — clone `planning.ts`, parameterize source slug + URL.
-2. **Legistar client smoke test** — single throwaway script hitting
-   `/Bodies` and `/Events` for SF, to confirm the instance is open and
-   the Events endpoint is healthy (a 2022 blog flagged it as broken;
-   needs verification before committing the path).
+2. **Legistar client smoke test** — `scraper/setup/legistar-smoke.ts`,
+   run via `npm run smoke:legistar`. Probes `/Bodies`, `/Matters`,
+   `/Matters/{id}/Histories`, `/Events` listing, and direct
+   `/Events/{id}` fetch. **Status: in progress / blocker.** See
+   "Legistar API status (M12 step 2 — open)" below for the partial
+   findings and pending v3 questions.
 3. **`scraper/lib/legistar.ts`** — typed client with pagination + OData
    v3 + 1000-row handling.
 4. **`scraper/sources/bos-legistar.ts`** — replaces the Playwright BOS
@@ -341,6 +345,71 @@ wins:
 5. **SFMTA Board scraper** — BoardDocs is a novel platform; do last so
    it doesn't block the cheaper wins. Falls back to scraping
    `sfmta.com` meeting pages if BoardDocs is hostile.
+
+### Legistar API status (M12 step 2 — open)
+
+Initial smoke-test runs (v1, v2) revealed multiple server-side issues
+in SF's Legistar deployment that change the M12/M14 plan. Status as of
+last test:
+
+**Confirmed working ✅**
+
+- `/Bodies` returns 151 bodies. SF's BOS-family includes 9 active
+  bodies: Board of Supervisors (id 1, type `Primary Legislative Body`)
+  plus 8 committees of type `Committee` — Rules (6), Budget and
+  Finance (119), Government Audit and Oversight (121), Budget and
+  Finance Sub-Committee (130), Public Safety and Neighborhood Services
+  (168), Land Use and Transportation (169), Budget and Finance Federal
+  Select (178), and Joint Land Use/Airport (183).
+- `/Matters` returns successfully (top-5 query). Field shape matches
+  documented schema.
+
+**Confirmed broken ❌**
+
+- `/Events` listing returns HTTP 400 on every query with the message
+  `"'Agenda Draft Status' or 'Agenda Status Not Vievable By The Public'
+  is not setup in settings. Value should be greater than 0."` This is
+  a server-side configuration error in SF's Legistar instance, not a
+  client filter syntax issue. Confirms the 2022 blog report was
+  accurate. Cannot be worked around client-side.
+
+**Open questions (pending v3 smoke run)**
+
+1. **Is `/Matters` data actually current?** v2's top-5 by
+   `MatterIntroDate desc` returned matters from 2018–2020 only. Either
+   SF restricts post-2020 matters server-side via `MatterRestrictViewID`,
+   or our `$orderby` interacts badly with NULL intro dates. v3 retries
+   with `$orderby=MatterId desc` and an explicit
+   `$filter=MatterIntroDate ge datetime'2025-01-01'` to disambiguate.
+2. **Does `/Matters/{id}/Histories` work at all?** v2 hit HTTP 500 on
+   the first matter tried (a "Communication" type from 2020). Unclear
+   whether the failure is matter-type-specific or endpoint-wide. v3
+   retries on up to 3 candidate matters, prioritizing real
+   Ordinance/Resolution rows.
+3. **Does `/Events?$top=5` (no filter) work?** Only the date filter is
+   known broken. v3 probes the unfiltered listing.
+4. **Does `/Events/{id}` direct fetch bypass the broken setting?** v3
+   tries this with any EventId discovered in step C.
+
+**Decision tree (resolved by v3 results)**
+
+- **Matters has recent data + (Events listing OR direct fetch) work** →
+  M12 stays mostly as planned, ingest routes through Matters →
+  Histories → Events.
+- **Matters has recent data but no Events path works** → Matters-only
+  ingest. M14 does project tracking on legislation; Playwright BOS
+  scraper stays for meeting/agenda-item ingest.
+- **Matters data is genuinely frozen at 2020** → Legistar API is a
+  historical archive only. M14 is dead via this path; would need to
+  scrape `sfgov.legistar.com` HTML for current matter detail pages.
+- **Histories broken across all matters** → API is essentially limited
+  to `/Bodies` enumeration. M12 reverts to per-committee HTML
+  scrapers, which contradicts the original "no committee scrapers"
+  guidance below.
+
+The smoke test code is at `scraper/setup/legistar-smoke.ts`. Re-run
+with `npm run smoke:legistar` and update this section with v3
+findings before resuming M12 step 3 (typed client) work.
 
 ## Things to avoid
 
