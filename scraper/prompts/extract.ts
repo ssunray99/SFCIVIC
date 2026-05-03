@@ -1,6 +1,6 @@
 import { NEIGHBORHOODS, TOPICS } from '@/lib/constants.ts';
 
-export const PROMPT_VERSION = 'v2';
+export const PROMPT_VERSION = 'v3';
 export const TOOL_NAME = 'record_agenda_items';
 
 export const SYSTEM_PROMPT = `You are an assistant that extracts structured data from San Francisco civic meeting agendas.
@@ -20,6 +20,7 @@ For each item identify:
 - comment_email: email address for submitting written comment on this item, or null if not stated.
 - comment_portal_url: URL of an online comment portal for this item, or null if not stated.
 - in_person_slot: free-form description of the in-person comment opportunity (date, time, room/location), or null if not stated. Example: "Tuesday May 12, 1:30pm, City Hall Room 400".
+- matter_file_number: the Legistar / Board of Supervisors file number for this item if one appears in the text, otherwise null. SF BOS agendas typically print this as a 6-digit number near the item, sometimes prefixed with "File No.", "File", or "Matter No." (e.g. "250604", "File No. 231256"). Strip the prefix and return only the file number itself as a string. Planning Commission and HPC items usually do NOT have file numbers — return null in that case. Use the EXACT digits from the text; do not guess or invent.
 
 Neighborhoods you may use: ${NEIGHBORHOODS.join(', ')}
 
@@ -55,6 +56,7 @@ export const TOOL_SCHEMA = {
           comment_email:      { type: ['string', 'null'] },
           comment_portal_url: { type: ['string', 'null'] },
           in_person_slot:     { type: ['string', 'null'], description: 'Free-form description of in-person comment opportunity; null if not stated' },
+          matter_file_number: { type: ['string', 'null'], description: 'Legistar/BOS file number, digits only (e.g. "250604"); null if not present' },
         },
       },
     },

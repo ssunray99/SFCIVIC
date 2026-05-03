@@ -18,6 +18,7 @@ export type ExtractedItem = {
   comment_email: string | null;
   comment_portal_url: string | null;
   in_person_slot: string | null;
+  matter_file_number: string | null; // Legistar/BOS file number, digits only
 };
 
 let _client: Anthropic | null = null;
@@ -107,6 +108,7 @@ export async function extractAgendaItems(
         comment_email:      nonEmptyString(x.comment_email),
         comment_portal_url: nonEmptyString(x.comment_portal_url),
         in_person_slot:     nonEmptyString(x.in_person_slot),
+        matter_file_number: validateMatterFile(x.matter_file_number),
       }))
       .filter((item) => item.title.length > 0);
 
@@ -170,4 +172,14 @@ function validateIsoDate(value: unknown): string | null {
   const trimmed = value.trim();
   // YYYY-MM-DD; reject everything else so we never insert garbage into a date column.
   return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
+}
+
+function validateMatterFile(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  // Strip any "File No." / "Matter" prefix the LLM may leave behind, plus whitespace.
+  const stripped = value.replace(/^\s*(?:file(?:\s*no\.?)?|matter(?:\s*no\.?)?)\s*[:#]?\s*/i, '').trim();
+  // SF BOS file numbers are 6 digits (year+sequence, e.g. 250604). Allow 5–7 to be safe;
+  // Planning Commission/HPC sometimes use formats like "2024-001234CUA" — accept those too
+  // by matching any sequence of digits, hyphens, and uppercase letters between 4–20 chars.
+  return /^[A-Z0-9-]{4,20}$/.test(stripped) ? stripped : null;
 }

@@ -30,9 +30,14 @@ complete.** HPC scraper shipped earlier; five standing committee scrapers
 (Land Use, Budget, Rules, Public Safety, GAO) now run daily alongside the
 Full Board scraper via a shared `bos-shared.ts` module. SFMTA Board
 (BoardDocs) is the remaining M12 item. M13 adds browse-by-neighborhood /
-browse-by-topic pages. M14 (cross-committee project tracking) is **blocked
-pending a new data source** since Legistar's `Matters` graph is unavailable.
-M15 covers analytics and supervisor accountability views.
+browse-by-topic pages. **M14 partially unblocked** — the LLM now extracts
+`matter_file_number` from BOS agendas as a stable cross-committee join key,
+and an extended Legistar API smoke test plus a DataSF SODA dataset probe
+confirmed `sfgov.legistar.com` HTML scraping is the only viable enrichment
+source (API frozen at 2020; DataSF Legislation dataset abandoned in 2013).
+The HTML matter-enrichment scraper + `legislation` table + `/projects/[id]`
+page are the remaining M14 work. M15 covers analytics and supervisor
+accountability views.
 
 | M   | Goal                                                              | State |
 | --- | ----------------------------------------------------------------- | ----- |
@@ -49,7 +54,7 @@ M15 covers analytics and supervisor accountability views.
 | M11 | Address search UI (foreground for users)                          | ✅    |
 | M12 | Source expansion (HPC ✅, BOS committees ✅, SFMTA ⬜)             | 🔄    |
 | M13 | Browse-by-neighborhood / browse-by-topic pages                    | ⬜    |
-| M14 | Project tracking — blocked, needs new data source                 | ⬜    |
+| M14 | Project tracking (file # extracted ✅, Legistar HTML enrich ⬜)    | 🔄    |
 | M15 | Supervisor accountability + analytics                             | ⬜    |
 
 Architectural detail for M11–M15 lives in `CLAUDE.md` under "Planned

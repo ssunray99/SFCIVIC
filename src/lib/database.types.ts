@@ -118,6 +118,7 @@ export type Database = {
           item_type: string | null
           llm_extracted_at: string | null
           llm_model: string | null
+          matter_file_number: string | null
           meeting_id: string
           neighborhoods: string[]
           position: number | null
@@ -137,6 +138,7 @@ export type Database = {
           item_type?: string | null
           llm_extracted_at?: string | null
           llm_model?: string | null
+          matter_file_number?: string | null
           meeting_id: string
           neighborhoods?: string[]
           position?: number | null
@@ -156,6 +158,7 @@ export type Database = {
           item_type?: string | null
           llm_extracted_at?: string | null
           llm_model?: string | null
+          matter_file_number?: string | null
           meeting_id?: string
           neighborhoods?: string[]
           position?: number | null
