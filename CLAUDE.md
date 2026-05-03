@@ -16,20 +16,20 @@ This is a learning project. The full plan lives at
 `/root/.claude/plans/i-want-to-build-silly-goblet.md` (also referenced from
 the README). Milestone progress is tracked in `README.md` under "Status".
 
-**Currently at M10 ✅** (address geocoding + implicit neighborhoods +
-action layer). M11 puts address search in front of users. M12 expands
-the source list with Playwright scrapers — HPC (clones the Planning
-pattern), per-committee BOS scrapers (Land Use & Transportation, Budget
-& Finance, Rules, Public Safety, GAO), and SFMTA Board. The original
-plan to use SF's Legistar Web API was dropped after a smoke test
-revealed multiple server-side bugs in SF's deployment — see "Legistar
-API status (M12 step 2 — closed: API not viable)" below. M13 adds
-browse-by-neighborhood / topic pages. M14 (cross-committee project
-tracking) is **blocked pending a new data source** since Legistar's
-Matters graph is unavailable. M15 covers analytics and supervisor
-accountability views. M9 (Vercel deploy) is unstarted. See "Planned
-architecture (M11–M15)" near the bottom of this file for data-model
-and ingestion-path decisions.
+**Currently at M11 ✅ / M12 🔄** M11 shipped: `/api/locate` geocodes a
+user-entered address (Nominatim + SF bbox) and resolves it to neighborhood
++ district; `AddressSearch` component sets both URL params and hands off
+to the existing filter pipeline. M12 BOS committee scrapers are live —
+HPC, Land Use, Budget, Rules, Public Safety, GAO each have their own
+`source_id` via a shared `scraper/lib/bos-shared.ts` module; SFMTA Board
+(BoardDocs) is the remaining M12 item. The original plan to use SF's
+Legistar Web API was dropped after a smoke test — see "Legistar API status
+(M12 step 2 — closed: API not viable)" below. M13 adds browse-by-neighborhood
+/ topic pages. M14 (cross-committee project tracking) is **blocked pending
+a new data source** since Legistar's Matters graph is unavailable. M15
+covers analytics and supervisor accountability views. M9 (Vercel deploy)
+is unstarted. See "Planned architecture (M11–M15)" near the bottom of this
+file for data-model and ingestion-path decisions.
 
 ## Stack
 
@@ -44,10 +44,11 @@ and ingestion-path decisions.
 - **Scraper:** Playwright Chromium + tsx, scheduled by GitHub Actions.
   All sources go through the same path — visit a grid, fetch agenda
   PDFs, pass text to `extractAgendaItems()`, persist via
-  `lib/extract-pipeline.ts`. Today: Planning Commission, BOS, hearings.
-  M12 adds HPC, per-committee BOS scrapers, and SFMTA. (We considered a
-  Legistar Web API path for BOS-family sources but it's non-viable for
-  SF — see "Legistar API status" near the bottom of this file.)
+  `lib/extract-pipeline.ts`. Sources: Planning Commission, HPC, BOS Full
+  Board + 5 standing committees (Land Use, Budget, Rules, Public Safety,
+  GAO), and public hearing notices. SFMTA Board (BoardDocs) is the
+  remaining M12 addition. BOS-family scrapers share `lib/bos-shared.ts`
+  and scrape `sf.gov` — no Legistar API (non-viable for SF; see below).
 - **LLM:** `claude-haiku-4-5-20251001` via `@anthropic-ai/sdk`. Tool-use with
   forced `record_agenda_items` tool for structured output. Prompt caching on
   system prompt + tool schema.
@@ -56,9 +57,21 @@ and ingestion-path decisions.
 
 ```
 scraper/
-  run.ts                       CLI entrypoint (planning|bos|hearings|extract)
+  run.ts                       CLI entrypoint (planning|bos|bos-*|hpc|extract)
   sources/planning.ts          SF Planning Commission scraper
-  sources/bos.ts               SF Board of Supervisors scraper
+  sources/bos.ts               SF Board of Supervisors — Full Board (thin caller)
+  sources/bos-land-use.ts      BOS Land Use and Transportation Committee
+  sources/bos-budget.ts        BOS Budget and Appropriations Committee
+  sources/bos-rules.ts         BOS Rules Committee
+  sources/bos-public-safety.ts BOS Public Safety and Neighborhood Services Committee
+  sources/bos-gao.ts           BOS Government Audit and Oversight Committee
+  sources/hpc.ts               SF Historic Preservation Commission scraper
+  lib/bos-shared.ts            Shared BOS scraping logic — all bos-* scrapers
+                               are thin callers into scrapeBosMeetings(opts).
+                               Pagination stops on onPage===0 (not added===0)
+                               so infrequent committees aren't under-collected.
+                               Legistar View.ashx minutes links are routed
+                               through fetchBytes, not page.goto.
   lib/playwright.ts            Browser bootstrap + fetchBytes()
   lib/pdf.ts                   pdf-parse wrapper (PINNED v1.1.1)
   lib/storage.ts               Supabase Storage upload helper
@@ -66,8 +79,7 @@ scraper/
   lib/llm.ts                   extractAgendaItems() — Anthropic call
   lib/extract-pipeline.ts      persistExtractedItems() — shared post-LLM
                                pipeline (geocode → polygon-resolve → insert
-                               agenda_items + agenda_item_locations); both
-                               source scrapers thin-call this
+                               agenda_items + agenda_item_locations)
   lib/geocode.ts               Nominatim geocoder (1.1s throttle, SF bbox)
                                with cache-first lookup against address_cache
   lib/geo.ts                   Hand-rolled point-in-polygon (handles
@@ -75,6 +87,7 @@ scraper/
                                Uses scraper/data/{neighborhoods,districts}.geojson.
                                DATASF_TO_ENUM maps DataSF analysis-neighborhood
                                names to our closed enum.
+                               Also imported by src/app/api/locate/route.ts.
   data/neighborhoods.geojson   DataSF Analysis Neighborhoods (4x4: ajp5-b2md)
   data/districts.geojson       DataSF Current Supervisor Districts (4x4: keex-zmn4)
   setup/fetch-geo.ts           One-shot polygon downloader; npm run fetch:geo
@@ -82,7 +95,16 @@ scraper/
 
 src/
   app/page.tsx                 RSC homepage — Upcoming + Past sections
+  app/api/locate/route.ts      GET /api/locate?address= — geocodes address via
+                               Nominatim, resolves to neighborhood + district
+                               via scraper/lib/geo.ts. No service-role key
+                               needed (no cache writes from this path).
   app/layout.tsx               Root layout
+  components/AddressSearch.tsx Client component — address input, calls
+                               /api/locate, sets ?neighborhood= and ?district=
+                               URL params (both when both resolve).
+  components/FilterBar.tsx     Neighborhood/district/topic/source dropdowns
+                               + keyword search; reads/writes URL params.
   components/MeetingCard.tsx   Meeting + its items (passes meetingUpcoming
                                down so ItemCard can hide stale CTAs)
   components/ItemCard.tsx      Single agenda item (with badges + amber
@@ -207,9 +229,12 @@ still works. Don't add new neighborhood values without updating both the
 enum in `src/lib/constants.ts` AND the mapping in `geo.ts`.
 
 The geo helpers and polygon assets live under `scraper/` rather than `src/`
-because (a) they're scraper-side today and (b) the .geojson files are 1.4MB
-+ 460KB, which we don't want bundled into the Next.js client. When M11
-adds an `/api/locate` route, it imports from `scraper/lib/geo.ts` directly.
+because (a) they're shared between scraper and API routes and (b) the
+.geojson files are 1.4MB + 460KB, which we don't want bundled into the
+Next.js client. `src/app/api/locate/route.ts` imports from
+`scraper/lib/geo.ts` directly (server-side only). `next.config.ts` sets
+`outputFileTracingIncludes` for `/api/locate` so the geojson files are
+included in the Vercel serverless bundle.
 
 ### Action layer (M10)
 
@@ -224,6 +249,27 @@ when the source mentions them: `comment_deadline` (date), `comment_email`,
 The CTA shows `mailto:` for `comment_email`, an external link for
 `comment_portal_url`, and the raw text for `in_person_slot`. `MeetingCard`
 computes `meetingUpcoming` once and passes it down to all child `ItemCard`s.
+
+### Address search UI (M11)
+
+`src/app/api/locate/route.ts` — GET handler. Accepts `?address=`, calls
+Nominatim with `", San Francisco, CA"` appended and an SF bounding box
+filter, then resolves the coordinates to a neighborhood and district via
+`scraper/lib/geo.ts`. Returns `{ lat, lng, neighborhood, district }`.
+Does **not** use the `address_cache` table (no service-role key needed
+in the Next.js runtime; one-off lookups don't need caching).
+
+`src/components/AddressSearch.tsx` — client component above FilterBar.
+On submit: calls `/api/locate`, then sets **both** `?neighborhood=` and
+`?district=` URL params when both resolve (one or the other when only
+one resolves). The existing `applyItemFilters` in `page.tsx` handles the
+rest with no changes.
+
+Neighborhood assignments follow DataSF Analysis Neighborhood polygons,
+which don't always match popular perception (e.g. City Hall → Tenderloin,
+lower Nob Hill → Financial District). This is correct and intentional —
+the same polygons drive the scraper-side geocoding pipeline, so results
+are internally consistent.
 
 ### Anthropic SDK call
 
@@ -241,16 +287,23 @@ In `scraper/lib/llm.ts`:
 ## Common commands
 
 ```bash
-npm run dev               # Next.js dev server on :3000
-npm run typecheck         # tsc --noEmit
-npm run lint              # eslint
-npm run scrape:planning   # full Planning Commission scrape
-npm run extract           # re-run LLM on stored meetings (limited utility —
-                          # storage holds event HTML, not packet PDF text)
-npm run db:types          # regenerate src/lib/database.types.ts from cloud
-npm run db:push           # apply migrations to linked cloud project
-npm run fetch:geo         # re-download SF neighborhood + district polygons
-                          # from DataSF into scraper/data/
+npm run dev                    # Next.js dev server on :3000
+npm run typecheck              # tsc --noEmit
+npm run lint                   # eslint
+npm run scrape:planning        # full Planning Commission scrape
+npm run scrape:bos             # BOS Full Board scrape
+npm run scrape:bos-land-use    # Land Use and Transportation Committee
+npm run scrape:bos-budget      # Budget and Appropriations Committee
+npm run scrape:bos-rules       # Rules Committee
+npm run scrape:bos-public-safety  # Public Safety Committee
+npm run scrape:bos-gao         # Government Audit and Oversight Committee
+npm run scrape:hpc             # Historic Preservation Commission
+npm run extract                # re-run LLM on stored meetings (limited utility —
+                               # storage holds event HTML, not packet PDF text)
+npm run db:types               # regenerate src/lib/database.types.ts from cloud
+npm run db:push                # apply migrations to linked cloud project
+npm run fetch:geo              # re-download SF neighborhood + district polygons
+                               # from DataSF into scraper/data/
 ```
 
 ## Planned architecture (M11–M15)
@@ -273,10 +326,10 @@ Sources fall into two patterns. Both end at the same persistence step
 - ~~**Legistar Web API**~~ — **dropped after smoke test (M12 step 2).**
   SF's Legistar instance has frozen data (2020), broken Histories, and
   broken Events listing. All BOS-family sources fall into the
-  Playwright path instead. The existing `scraper/sources/bos.ts`
-  Playwright scraper is the baseline; per-committee scrapers (Land Use,
-  Budget & Finance, Rules, Public Safety, GAO) follow the same
-  Playwright pattern and will be added as M12 substeps.
+  Playwright path instead. `scraper/lib/bos-shared.ts` is the shared
+  module; `bos.ts` (Full Board) and five committee scrapers (Land Use,
+  Budget, Rules, Public Safety, GAO) are thin callers. All ship as of
+  M12. SFMTA Board (BoardDocs) is the remaining M12 item.
 
 ### M14: project tracking (BLOCKED — needs new data source)
 
@@ -310,10 +363,11 @@ All scraping is Playwright/HTML; there is no API path. Platforms:
 
 - **`sfplanning.org`** — Planning Commission, Historic Preservation
   Commission, public hearing notices.
-- **`sf.gov`** — Board of Supervisors (current `bos.ts` scraper).
-- **`sfgov.legistar.com`** (HTML, not the API) — likely the path for
-  per-committee BOS scrapers in M12, since the per-committee calendars
-  are published there.
+- **`sf.gov`** — Board of Supervisors Full Board + all five standing
+  committee scrapers. The committees' meeting pages live under the same
+  sf.gov BOS events listing, filtered by title pattern in bos-shared.ts.
+  Minutes for some older meetings link out to `sfgov.legistar.com/View.ashx`
+  (direct PDF downloads); those are handled by fetchBytes, not page.goto.
 - **`go.boarddocs.com/ca/sfmta`** (BoardDocs) — SFMTA Board.
 
 ### M12 substep order
@@ -321,19 +375,20 @@ All scraping is Playwright/HTML; there is no API path. Platforms:
 Cheapest / highest-confidence first so novel platforms don't block easy
 wins:
 
-1. **HPC scraper** — clone `planning.ts`, parameterize source slug + URL.
-2. **Legistar client smoke test** — ✅ **COMPLETE. Verdict: API not viable.**
-   See "Legistar API status (M12 step 2 — closed)" below for full
-   findings. Steps 3–4 below are replaced.
-3. ~~`scraper/lib/legistar.ts`~~ — **DROPPED.** SF's Legistar API
-   returns stale 2020 data, 500 on Histories, and 400 on all Events
-   queries. Building a typed client is pointless.
-4. ~~`scraper/sources/bos-legistar.ts`~~ — **DROPPED.** Fall back to
-   Playwright HTML scraping for BOS and its standing committees. The
-   existing `bos.ts` scraper is the baseline; per-committee scrapers
-   (Land Use, Budget & Finance, etc.) follow the same Playwright
-   pattern and will be added in later M12 substeps.
-5. **SFMTA Board scraper** — BoardDocs is a novel platform; do last so
+1. ✅ **HPC scraper** — cloned `planning.ts`, parameterized source slug + URL.
+2. ✅ **Legistar client smoke test** — **COMPLETE. Verdict: API not viable.**
+   See "Legistar API status (M12 step 2 — closed)" below for full findings.
+   Steps 3–4 below were replaced by the Playwright path.
+3. ~~`scraper/lib/legistar.ts`~~ — **DROPPED.**
+4. ~~`scraper/sources/bos-legistar.ts`~~ — **DROPPED.**
+5. ✅ **Per-committee BOS scrapers** — `bos-shared.ts` shared module +
+   thin callers for Land Use, Budget, Rules, Public Safety, GAO. All
+   scrape `sf.gov` BOS events listing, filter by title pattern, and
+   write to separate `source_id`s. Two bugs found and fixed during
+   initial run: Legistar `View.ashx` minutes links (use fetchBytes, not
+   page.goto) and early pagination stop on `added===0` (changed to
+   `onPage===0` so infrequent committees paginate fully).
+6. **SFMTA Board scraper** — BoardDocs is a novel platform; do last so
    it doesn't block the cheaper wins. Falls back to scraping
    `sfmta.com` meeting pages if BoardDocs is hostile.
 
@@ -406,11 +461,11 @@ scraping for BOS and its standing committees.
 - **Don't add a new entry to `NEIGHBORHOODS` without also updating
   `DATASF_TO_ENUM` in `scraper/lib/geo.ts`.** Otherwise polygon-derived
   neighborhoods will silently disagree with the closed enum.
-- **Do build per-committee Playwright scrapers** (M12+, reversed from
-  original guidance). SF's Legistar API is not viable (data frozen at
-  2020, Histories/Events broken). Land Use & Transportation, Budget &
-  Finance, Rules, Public Safety, GAO, Joint City/School all need their
-  own `scraper/sources/<committee>.ts` modeled on `bos.ts`.
+- **Per-committee BOS scrapers are done** (M12). All five committees
+  (`bos-land-use`, `bos-budget`, `bos-rules`, `bos-public-safety`,
+  `bos-gao`) ship as thin callers into `scraper/lib/bos-shared.ts`.
+  Adding a new committee = new thin caller + seed row + npm script +
+  GHA matrix entry. Don't duplicate bos-shared.ts logic.
 - **Don't add error handling for cases that can't happen.** Trust framework
   guarantees; only validate at boundaries (LLM output, scraped HTML).
 - **Don't use `--no-verify` or skip hooks.**

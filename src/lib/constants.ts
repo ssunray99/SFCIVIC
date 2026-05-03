@@ -68,9 +68,14 @@ export const ITEM_TYPES = [
 export type ItemType = (typeof ITEM_TYPES)[number];
 
 export const SOURCES = [
-  { id: 'planning', name: 'SF Planning Commission' },
-  { id: 'bos', name: 'SF Board of Supervisors' },
-  { id: 'hpc', name: 'SF Historic Preservation Commission' },
-  { id: 'hearings', name: 'SF Public Hearing Notices' },
+  { id: 'planning',          name: 'SF Planning Commission' },
+  { id: 'bos',               name: 'SF Board of Supervisors (Full Board)' },
+  { id: 'bos-land-use',      name: 'BOS Land Use & Transportation' },
+  { id: 'bos-budget',        name: 'BOS Budget & Appropriations' },
+  { id: 'bos-rules',         name: 'BOS Rules Committee' },
+  { id: 'bos-public-safety', name: 'BOS Public Safety & Neighborhood Services' },
+  { id: 'bos-gao',           name: 'BOS Government Audit & Oversight' },
+  { id: 'hpc',               name: 'SF Historic Preservation Commission' },
+  { id: 'hearings',          name: 'SF Public Hearing Notices' },
 ] as const;
 export type SourceId = (typeof SOURCES)[number]['id'];

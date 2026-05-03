@@ -22,6 +22,12 @@ jobs:
         source:
           - planning
           - bos
+          - bos-land-use
+          - bos-budget
+          - bos-rules
+          - bos-public-safety
+          - bos-gao
+          - hpc
           # Note: legislative notices (hearings) are folded into the planning
           # scraper (scraper/sources/planning.ts fetchLegislativeNotices) rather
           # than running as a separate job.

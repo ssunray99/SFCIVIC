@@ -5,7 +5,7 @@ Supervisors meetings, and public hearing notices — scraped, summarized by an
 LLM, and tagged by neighborhood, district, and topic. Filter by your
 neighborhood or by topic ("anything about housing in District 5").
 
-**Stack** — Next.js 15 (App Router) on Vercel · Supabase (Postgres + Storage)
+**Stack** — Next.js 16 (App Router) on Vercel · Supabase (Postgres + Storage)
 · Playwright + GitHub Actions cron · Claude Haiku 4.5 (`claude-haiku-4-5-20251001`)
 for extraction.
 
@@ -23,17 +23,16 @@ Districts polygons. Per-item action fields (written-comment deadline, email,
 portal, in-person slot) are surfaced as a "Take action by {date}" CTA on
 upcoming items.
 
-**What's next.** M11 puts address search in front of users. M12 expands
-the source list with Playwright scrapers: a Historic Preservation
-Commission scraper (clones the Planning pattern), per-committee BOS
-scrapers (Land Use & Transportation, Budget & Finance, Rules, Public
-Safety, GAO), and an SFMTA Board scraper. The original plan to use SF's
-Legistar Web API was dropped after smoke-testing revealed it's
-non-viable for SF (frozen Matters data, broken Histories and Events
-endpoints — see `CLAUDE.md` for details). M13 adds browse-by-neighborhood
-/ browse-by-topic pages. M14 (cross-committee project tracking) is
-**blocked pending a new data source** since Legistar's `Matters` graph
-is unavailable. M15 covers analytics and supervisor accountability views.
+**M11 complete.** An address search box lets users type any SF address;
+`/api/locate` geocodes it via Nominatim and resolves it to a neighborhood
+and supervisor district, both applied as filters. **M12 BOS committees
+complete.** HPC scraper shipped earlier; five standing committee scrapers
+(Land Use, Budget, Rules, Public Safety, GAO) now run daily alongside the
+Full Board scraper via a shared `bos-shared.ts` module. SFMTA Board
+(BoardDocs) is the remaining M12 item. M13 adds browse-by-neighborhood /
+browse-by-topic pages. M14 (cross-committee project tracking) is **blocked
+pending a new data source** since Legistar's `Matters` graph is unavailable.
+M15 covers analytics and supervisor accountability views.
 
 | M   | Goal                                                              | State |
 | --- | ----------------------------------------------------------------- | ----- |
@@ -47,8 +46,8 @@ is unavailable. M15 covers analytics and supervisor accountability views.
 | M8  | GitHub Actions cron                                               | ✅    |
 | M9  | Vercel deploy                                                     | ⬜    |
 | M10 | Address geocoding + implicit neighborhoods + action layer         | ✅    |
-| M11 | Address search UI (foreground for users)                          | ⬜    |
-| M12 | Source expansion (HPC, BOS committees, SFMTA — all Playwright)    | ⬜    |
+| M11 | Address search UI (foreground for users)                          | ✅    |
+| M12 | Source expansion (HPC ✅, BOS committees ✅, SFMTA ⬜)             | 🔄    |
 | M13 | Browse-by-neighborhood / browse-by-topic pages                    | ⬜    |
 | M14 | Project tracking — blocked, needs new data source                 | ⬜    |
 | M15 | Supervisor accountability + analytics                             | ⬜    |
