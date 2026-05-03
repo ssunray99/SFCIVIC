@@ -8,6 +8,13 @@
 //   - Does Histories work on real legislation, or only some matter types?
 //   - Does Events listing work without a filter?
 //   - Does direct /Events/{id} fetch bypass the broken filter?
+//
+// v4 (2026-05) adds final-salvage probes [F] and [G]:
+//   - [F1/F2] alternate orderings — does `MatterLastModifiedUtc desc` or
+//     `MatterAgendaDate desc` surface post-2020 rows that `MatterIntroDate desc`
+//     hides (e.g., due to null IntroDate on recent rows)?
+//   - [G] forward MatterId-guess — can we fetch /Matters/{id} directly past
+//     the apparent 34112 ceiling?
 
 const BASE = 'https://webapi.legistar.com/v1/sfgov';
 
@@ -27,6 +34,8 @@ type Matter = {
   MatterStatusName: string | null;
   MatterIntroDate: string | null;
   MatterBodyId: number | null;
+  MatterLastModifiedUtc?: string | null;
+  MatterAgendaDate?: string | null;
 };
 
 type MatterHistory = {
@@ -178,6 +187,34 @@ async function probeEventsListing(): Promise<EventRow[]> {
   return events;
 }
 
+async function probeMattersByAltDate(
+  field: 'MatterLastModifiedUtc' | 'MatterAgendaDate',
+  label: string,
+): Promise<Matter[]> {
+  const url = `${BASE}/Matters?$top=5&$orderby=${encodeURIComponent(`${field} desc`)}`;
+  console.log(`\n[F/${label}] GET ${url}`);
+  const matters = await get<Matter[]>(url);
+  console.log(`Received ${matters.length} matter(s) ordered by ${field}.\n`);
+  printMattersTable(matters);
+  console.log(`\n${field} values:`);
+  for (const m of matters) {
+    const altDate = m[field];
+    console.log(`  MatterId=${pad(String(m.MatterId), 8)}${field}=${(altDate ?? '<null>').slice(0, 19)}`);
+  }
+  return matters;
+}
+
+async function probeMatterDirect(matterId: number): Promise<Matter> {
+  const url = `${BASE}/Matters/${matterId}`;
+  console.log(`\n[G/${matterId}] GET ${url}`);
+  const m = await get<Matter>(url);
+  console.log(
+    `MatterId=${m.MatterId}  File=${m.MatterFile}  IntroDate=${m.MatterIntroDate?.slice(0, 10) ?? '?'}  Type=${m.MatterTypeName ?? '?'}`,
+  );
+  console.log(`Title: ${(m.MatterTitle ?? m.MatterName ?? '').replace(/\s+/g, ' ').slice(0, 120)}`);
+  return m;
+}
+
 async function probeEventDirect(eventId: number): Promise<void> {
   const url = `${BASE}/Events/${eventId}?EventItems=1`;
   console.log(`\n[E] GET ${url}`);
@@ -264,6 +301,39 @@ async function main() {
     results.push({ name: '[E] /Events/{id} direct', ok: false, note: 'skipped (no EventId from any C probe)' });
   }
 
+  // [F] Alternate orderings — does the dataset have post-2020 rows that IntroDate desc hides?
+  const f1 = await runStep(
+    '[F1] /Matters by LastModifiedUtc desc',
+    () => probeMattersByAltDate('MatterLastModifiedUtc', 'LastMod-desc'),
+    (m) => {
+      const top = m[0];
+      return top
+        ? `top LastMod=${top.MatterLastModifiedUtc?.slice(0, 10) ?? '?'} IntroDate=${top.MatterIntroDate?.slice(0, 10) ?? '?'}`
+        : 'empty';
+    },
+  );
+  const f2 = await runStep(
+    '[F2] /Matters by AgendaDate desc',
+    () => probeMattersByAltDate('MatterAgendaDate', 'AgendaDate-desc'),
+    (m) => {
+      const top = m[0];
+      return top
+        ? `top AgendaDate=${top.MatterAgendaDate?.slice(0, 10) ?? '?'} IntroDate=${top.MatterIntroDate?.slice(0, 10) ?? '?'}`
+        : 'empty';
+    },
+  );
+
+  // [G] Direct /Matters/{id} fetch past the 34112 ceiling — does forward ID-guessing work?
+  const gResults: Array<{ id: number; matter?: Matter }> = [];
+  for (const id of [40000, 60000, 100000]) {
+    const matter = await runStep(
+      `[G/${id}] /Matters/${id} direct`,
+      () => probeMatterDirect(id),
+      (m) => `IntroDate=${m.MatterIntroDate?.slice(0, 10) ?? '?'} File=${m.MatterFile ?? '?'}`,
+    );
+    gResults.push({ id, matter });
+  }
+
   console.log('\n== Summary ==');
   console.log(`${pad('Step', 56)}${pad('Status', 8)}Note`);
   console.log('-'.repeat(140));
@@ -273,13 +343,46 @@ async function main() {
 
   console.log('\n== Verdict ==');
   const okSteps = new Set(results.filter((r) => r.ok).map((r) => r.name.split(' ')[0]));
+
+  // Distinguish "fresh new legislation" from "metadata churn on old matters".
+  // A recent MatterLastModifiedUtc on a 2018 IntroDate matter is housekeeping, not
+  // new legislation — useless for project tracking. Only fresh INTRO dates (or
+  // forward-reachable MatterIds) prove SF is still ingesting new matters via API.
+  const FRESH_CUTOFF = '2024-01-01';
+  const findFreshIntro = (matters: Matter[] | undefined): Matter | undefined =>
+    matters?.find((m) => m.MatterIntroDate != null && m.MatterIntroDate >= FRESH_CUTOFF);
+  const freshIntroF1 = findFreshIntro(f1);
+  const freshIntroF2 = findFreshIntro(f2);
+  const gFresh = gResults.find((r) => r.matter !== undefined);
+  const datasetHasNewLegislation = !!(freshIntroF1 || freshIntroF2 || gFresh);
+
+  // Secondary signal: even if no fresh intros, is anyone touching the data at all?
+  const f1Top = f1?.[0];
+  const recentLastMod = !!(f1Top?.MatterLastModifiedUtc && f1Top.MatterLastModifiedUtc >= '2024-01-01');
+
   if (okSteps.has('[D]') || okSteps.has('[E]')) {
     console.log('Events are reachable somehow → API ingest path is viable.');
+  } else if (datasetHasNewLegislation) {
+    const evidence = [
+      freshIntroF1 ? `F1 IntroDate=${freshIntroF1.MatterIntroDate?.slice(0, 10)}` : null,
+      freshIntroF2 ? `F2 IntroDate=${freshIntroF2.MatterIntroDate?.slice(0, 10)}` : null,
+      gFresh ? `MatterId=${gFresh.id} IntroDate=${gFresh.matter?.MatterIntroDate?.slice(0, 10)}` : null,
+    ].filter(Boolean).join(', ');
+    console.log(
+      `New legislation IS being added to the API (${evidence}) → Matters-only ingest viable for project tracking. /Histories and /Events are still broken so agenda items would still come from HTML scraping.`,
+    );
+  } else if (recentLastMod) {
+    const oldestIntro = f1Top?.MatterIntroDate?.slice(0, 10) ?? '?';
+    console.log(
+      `Dataset has recent LastModifiedUtc (${f1Top?.MatterLastModifiedUtc?.slice(0, 10)}) but only on old matters (top by LastMod has IntroDate=${oldestIntro}). This is metadata churn on legacy records, NOT new legislation → API is not viable for current ingest. Plan to scrape sfgov.legistar.com HTML instead.`,
+    );
   } else if ([...okSteps].some((s) => s.startsWith('[C]'))) {
-    console.log('Histories works but Events do not → can build Matters-only ingest, no agenda items.');
+    console.log('Histories works but Events and alternate orderings reveal no fresh data → API not viable for current legislation.');
   } else {
-    console.log('Only Bodies and/or Matters work → API is not viable for ingest. Plan to scrape sfgov.legistar.com HTML instead.');
+    console.log('Only Bodies and/or pre-2021 Matters reachable. F/G probes confirm dataset is genuinely frozen → API is not viable for ingest. Plan to scrape sfgov.legistar.com HTML instead.');
   }
 }
 
 main();
+
+export {};

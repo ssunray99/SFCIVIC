@@ -25,9 +25,17 @@ HPC, Land Use, Budget, Rules, Public Safety, GAO each have their own
 (BoardDocs) is the remaining M12 item. The original plan to use SF's
 Legistar Web API was dropped after a smoke test — see "Legistar API status
 (M12 step 2 — closed: API not viable)" below. M13 adds browse-by-neighborhood
-/ topic pages. M14 (cross-committee project tracking) is **blocked pending
-a new data source** since Legistar's Matters graph is unavailable. M15
-covers analytics and supervisor accountability views. M9 (Vercel deploy) is complete. See "Planned architecture (M11–M15)" near the bottom of this
+/ topic pages. **M14 partially unblocked** — the LLM now extracts
+`matter_file_number` from BOS agendas (prompt v3) as a stable
+cross-committee join key. The original plan to use Legistar's `Matters`
+API graph stays dead (smoke test confirmed frozen 2020 data), and a
+follow-up DataSF SODA probe found the city's `Legislation` dataset
+(`cz9b-x8ed`) hasn't updated since 2013. The remaining M14 work is a
+`sfgov.legistar.com` HTML enrichment scraper (matter detail pages →
+status, sponsor, history) keyed on `matter_file_number`, plus the
+`legislation` table and `/projects/[fileNumber]` page. M15 covers
+analytics and supervisor accountability views. M9 (Vercel deploy) is
+complete. See "Planned architecture (M11–M15)" near the bottom of this
 file for data-model and ingestion-path decisions.
 
 ## Stack
@@ -330,31 +338,43 @@ Sources fall into two patterns. Both end at the same persistence step
   Budget, Rules, Public Safety, GAO) are thin callers. All ship as of
   M12. SFMTA Board (BoardDocs) is the remaining M12 item.
 
-### M14: project tracking (BLOCKED — needs new data source)
+### M14: project tracking (PARTIALLY UNBLOCKED — file # extracted, enrichment pending)
 
 Today `agenda_items` are island-meetings — the same ordinance appearing
-on Land Use Committee 4/15 and Full Board 4/29 is two unrelated rows.
-The original plan was to use Legistar's `Matters` resource as the
-stable cross-meeting identifier; that path is dead because SF's
-Legistar API has frozen Matters data (2020) and a broken Histories
-endpoint. See "Legistar API status" below.
+on Land Use Committee 4/15 and Full Board 4/29 used to be two unrelated
+rows. As of prompt v3 the LLM now extracts `matter_file_number` from
+each item (BOS agendas print 6-digit file numbers like "250604"). Those
+two rows now carry the same `matter_file_number`, giving us a stable
+cross-committee join key with zero new scraping infrastructure.
 
-The feature itself — a stable per-project identifier joining
-appearances across committees + a `/projects/[id]` page with sponsors,
-status, and a history timeline — remains a real need. Candidate
-alternative data sources:
+What's still missing for the full M14 surface (`/projects/[id]` page
+with sponsors, status, history timeline):
 
-- **Scrape `sfgov.legistar.com` matter detail pages** (HTML, not API).
-  Slower than an API but the data is published; would still get title,
-  type, status, sponsors, history.
-- **Derive matter IDs from agenda PDFs** via the existing LLM
-  extraction (BOS agendas reference matter file numbers like `231256`
-  — extract them as a structured field, deduplicate to form the
-  project graph).
-- **Defer M14** until a different city system exposes the data.
+- **`sfgov.legistar.com` HTML enrichment scraper.** Take
+  `select distinct matter_file_number from agenda_items`, fetch each
+  matter's detail page from Legistar HTML (the website is current; only
+  the v3 API is broken), parse status/sponsor/history.
+- **`legislation` table.** Keyed on `matter_file_number`, populated by
+  the enrichment scraper, FK target for `agenda_items.matter_file_number`.
+- **`/projects/[fileNumber]` RSC page.** Joins the two tables.
 
-No work on M14 schema or page should start until a data source is
-picked.
+Discovery (which file numbers exist) comes from the agenda PDFs we
+already scrape. Enrichment (what each file number means) is the
+remaining work. Architecture is "agenda PDFs discover, Legistar HTML
+enriches" — not the original plan of "Legistar API as primary source."
+
+Sources considered and rejected during M14 design:
+
+- **Legistar v3 REST API** — dropped. Smoke test confirmed `/Matters`
+  frozen at 2020-09-17 (max MatterId=34112), `/Histories` HTTP 500,
+  `/Events` HTTP 400. Extended F/G probes (LastModifiedUtc desc,
+  AgendaDate desc, direct ID-fetch at 40000/60000/100000) ruled out
+  any salvage — the dataset is genuinely frozen, not just hidden behind
+  the wrong ordering. See `scraper/setup/legistar-smoke.ts`.
+- **DataSF SODA Legislation dataset (`cz9b-x8ed`)** — dropped. Last
+  updated 2013-10-30; metadata returns 0 columns; data endpoint 403.
+  Catalog search for SF BOS legislation found no current alternative.
+  See `scraper/setup/datasf-legislation-smoke.ts`.
 
 ### Source platforms (which site each source lives on)
 
@@ -465,6 +485,15 @@ scraping for BOS and its standing committees.
   `bos-gao`) ship as thin callers into `scraper/lib/bos-shared.ts`.
   Adding a new committee = new thin caller + seed row + npm script +
   GHA matrix entry. Don't duplicate bos-shared.ts logic.
+- **Don't bump `PROMPT_VERSION` without re-running the smoke test.**
+  Current: `v3` (added `matter_file_number`). The version stamps every
+  `agenda_items` row so we can backfill rows extracted under older
+  prompts when the schema or instructions meaningfully change.
+- **For new BOS file numbers showing up in agendas, write to
+  `agenda_items.matter_file_number` only.** The future `legislation`
+  table is the enrichment target — agenda extraction is discovery only.
+  Don't try to populate matter status/sponsor from the agenda PDF; that
+  belongs to the (still-to-build) Legistar HTML enrichment scraper.
 - **Don't add error handling for cases that can't happen.** Trust framework
   guarantees; only validate at boundaries (LLM output, scraped HTML).
 - **Don't use `--no-verify` or skip hooks.**

@@ -111,6 +111,7 @@ export async function persistExtractedItems(
     comment_email: item.comment_email,
     comment_portal_url: item.comment_portal_url,
     in_person_slot: item.in_person_slot,
+    matter_file_number: item.matter_file_number,
     llm_model: model,
     prompt_version: promptVersion,
     llm_extracted_at: now,

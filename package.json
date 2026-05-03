@@ -21,6 +21,7 @@
     "extract": "tsx --env-file=.env.local scraper/run.ts extract",
     "fetch:geo": "tsx scraper/setup/fetch-geo.ts",
     "smoke:legistar": "tsx scraper/setup/legistar-smoke.ts",
+    "smoke:datasf": "tsx scraper/setup/datasf-legislation-smoke.ts",
     "db:types": "supabase gen types typescript --linked > src/lib/database.types.ts",
     "db:push": "supabase db push",
     "supabase": "supabase"
