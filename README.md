@@ -16,28 +16,19 @@ This is a learning project. The plan and milestones live at
 
 ## Status
 
-**Milestone 10 complete.** Addresses are now extracted by the LLM, geocoded
-via Nominatim (cached), and resolved to neighborhood + supervisor district
-via point-in-polygon on DataSF Analysis Neighborhoods + Current Supervisor
-Districts polygons. Per-item action fields (written-comment deadline, email,
-portal, in-person slot) are surfaced as a "Take action by {date}" CTA on
-upcoming items.
-
-**M11 complete.** An address search box lets users type any SF address;
-`/api/locate` geocodes it via Nominatim and resolves it to a neighborhood
-and supervisor district, both applied as filters. **M12 BOS committees
-complete.** HPC scraper shipped earlier; five standing committee scrapers
-(Land Use, Budget, Rules, Public Safety, GAO) now run daily alongside the
-Full Board scraper via a shared `bos-shared.ts` module. SFMTA Board
-(BoardDocs) is the remaining M12 item. M13 adds browse-by-neighborhood /
-browse-by-topic pages. **M14 partially unblocked** — the LLM now extracts
-`matter_file_number` from BOS agendas as a stable cross-committee join key,
-and an extended Legistar API smoke test plus a DataSF SODA dataset probe
-confirmed `sfgov.legistar.com` HTML scraping is the only viable enrichment
-source (API frozen at 2020; DataSF Legislation dataset abandoned in 2013).
-The HTML matter-enrichment scraper + `legislation` table + `/projects/[id]`
-page are the remaining M14 work. M15 covers analytics and supervisor
-accountability views.
+**M12 complete.** SFMTA Board of Directors scraper added (`sfmta.com`
+Playwright — BoardDocs blocks automated fetches). All sources are live:
+Planning, HPC, BOS Full Board + 5 committees, SFMTA Board, and public
+hearing notices. **M13 complete.** Browse-by-neighborhood (`/neighborhoods/[slug]`)
+and browse-by-topic (`/topics/[slug]`) pages with static pre-generation.
+**M15 (analytics) complete.** `/analytics` page shows year-to-date item
+counts by neighborhood, topic, district, and source; cross-committee matter
+tracking; scraper health table. **M14 infrastructure complete** — `legislation`
+table (migration 0004), Legistar HTML enrichment scraper
+(`scraper/setup/legistar-html-enrich.ts`), and `/projects/[fileNumber]` page
+are all built. Run `npm run enrich:legislation` to populate Legistar metadata
+for matter file numbers extracted from BOS agendas. Supervisor vote/attendance
+accountability views require a data source not yet identified.
 
 | M   | Goal                                                              | State |
 | --- | ----------------------------------------------------------------- | ----- |
@@ -49,13 +40,13 @@ accountability views.
 | M6  | Filters & search                                                  | ✅    |
 | M7  | Detail pages + about                                              | ✅    |
 | M8  | GitHub Actions cron                                               | ✅    |
-| M9  | Vercel deploy                                                     | ⬜    |
+| M9  | Vercel deploy                                                     | ✅    |
 | M10 | Address geocoding + implicit neighborhoods + action layer         | ✅    |
 | M11 | Address search UI (foreground for users)                          | ✅    |
-| M12 | Source expansion (HPC ✅, BOS committees ✅, SFMTA ⬜)             | 🔄    |
-| M13 | Browse-by-neighborhood / browse-by-topic pages                    | ⬜    |
-| M14 | Project tracking (file # extracted ✅, Legistar HTML enrich ⬜)    | 🔄    |
-| M15 | Supervisor accountability + analytics                             | ⬜    |
+| M12 | Source expansion (HPC ✅, BOS committees ✅, SFMTA ✅)             | ✅    |
+| M13 | Browse-by-neighborhood / browse-by-topic pages                    | ✅    |
+| M14 | Project tracking (infra ✅; run enrich:legislation to populate)   | 🔄    |
+| M15 | Analytics ✅; supervisor vote/accountability needs data source    | 🔄    |
 
 Architectural detail for M11–M15 lives in `CLAUDE.md` under "Planned
 architecture."

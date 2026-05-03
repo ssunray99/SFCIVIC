@@ -16,27 +16,21 @@ This is a learning project. The full plan lives at
 `/root/.claude/plans/i-want-to-build-silly-goblet.md` (also referenced from
 the README). Milestone progress is tracked in `README.md` under "Status".
 
-**Currently at M11 ✅ / M12 🔄** M11 shipped: `/api/locate` geocodes a
-user-entered address (Nominatim + SF bbox) and resolves it to neighborhood
-+ district; `AddressSearch` component sets both URL params and hands off
-to the existing filter pipeline. M12 BOS committee scrapers are live —
-HPC, Land Use, Budget, Rules, Public Safety, GAO each have their own
-`source_id` via a shared `scraper/lib/bos-shared.ts` module; SFMTA Board
-(BoardDocs) is the remaining M12 item. The original plan to use SF's
-Legistar Web API was dropped after a smoke test — see "Legistar API status
-(M12 step 2 — closed: API not viable)" below. M13 adds browse-by-neighborhood
-/ topic pages. **M14 partially unblocked** — the LLM now extracts
-`matter_file_number` from BOS agendas (prompt v3) as a stable
-cross-committee join key. The original plan to use Legistar's `Matters`
-API graph stays dead (smoke test confirmed frozen 2020 data), and a
-follow-up DataSF SODA probe found the city's `Legislation` dataset
-(`cz9b-x8ed`) hasn't updated since 2013. The remaining M14 work is a
-`sfgov.legistar.com` HTML enrichment scraper (matter detail pages →
-status, sponsor, history) keyed on `matter_file_number`, plus the
-`legislation` table and `/projects/[fileNumber]` page. M15 covers
-analytics and supervisor accountability views. M9 (Vercel deploy)
-is unstarted. See "Planned architecture (M11–M15)" near the bottom of this
-file for data-model and ingestion-path decisions.
+**Currently: M9–M13 ✅, M15 ✅ (analytics), M14 🔄.** M12 is fully complete:
+HPC, Land Use, Budget, Rules, Public Safety, GAO, and SFMTA Board scrapers
+are all live. SFMTA Board scrapes `sfmta.com` with Playwright (BoardDocs
+blocks automated fetches). M13 browse pages are live at `/neighborhoods/[slug]`
+and `/topics/[slug]` with static pre-generation and 5-min revalidation. M15
+analytics page is live at `/analytics` — district/topic/source item counts,
+cross-committee matter tracking, scraper health table. **M14** infrastructure
+is complete: `legislation` table (migration 0004), `scraper/setup/legistar-html-enrich.ts`
+(Playwright-based per-matter enrichment from sfgov.legistar.com HTML), and
+`/projects/[fileNumber]` page (committee appearances + legislative history).
+Run `npm run enrich:legislation` once to populate Legistar metadata. Supervisor
+accountability views (vote/attendance data) require a data source not yet
+identified — see "M14/M15 remaining work" in Planned architecture. See
+"Planned architecture (M11–M15)" near the bottom of this file for data-model
+and ingestion-path decisions.
 
 ## Stack
 
@@ -53,9 +47,10 @@ file for data-model and ingestion-path decisions.
   PDFs, pass text to `extractAgendaItems()`, persist via
   `lib/extract-pipeline.ts`. Sources: Planning Commission, HPC, BOS Full
   Board + 5 standing committees (Land Use, Budget, Rules, Public Safety,
-  GAO), and public hearing notices. SFMTA Board (BoardDocs) is the
-  remaining M12 addition. BOS-family scrapers share `lib/bos-shared.ts`
-  and scrape `sf.gov` — no Legistar API (non-viable for SF; see below).
+  GAO), SFMTA Board of Directors, and public hearing notices. BOS-family
+  scrapers share `lib/bos-shared.ts` and scrape `sf.gov`. SFMTA scrapes
+  `sfmta.com` directly (BoardDocs blocks automated fetches). No Legistar
+  API (non-viable for SF; see below).
 - **LLM:** `claude-haiku-4-5-20251001` via `@anthropic-ai/sdk`. Tool-use with
   forced `record_agenda_items` tool for structured output. Prompt caching on
   system prompt + tool schema.
@@ -311,6 +306,8 @@ npm run db:types               # regenerate src/lib/database.types.ts from cloud
 npm run db:push                # apply migrations to linked cloud project
 npm run fetch:geo              # re-download SF neighborhood + district polygons
                                # from DataSF into scraper/data/
+npm run enrich:legislation     # populate legislation table from sfgov.legistar.com
+                               # HTML (keyed on matter_file_number from agenda_items)
 ```
 
 ## Planned architecture (M11–M15)
@@ -407,9 +404,9 @@ wins:
    initial run: Legistar `View.ashx` minutes links (use fetchBytes, not
    page.goto) and early pagination stop on `added===0` (changed to
    `onPage===0` so infrequent committees paginate fully).
-6. **SFMTA Board scraper** — BoardDocs is a novel platform; do last so
-   it doesn't block the cheaper wins. Falls back to scraping
-   `sfmta.com` meeting pages if BoardDocs is hostile.
+6. **SFMTA Board scraper** ✅ — `scraper/sources/sfmta.ts` scrapes
+   `sfmta.com/meetings-events`. BoardDocs (`go.boarddocs.com/ca/sfmta`)
+   returns 403 to automated fetches; `sfmta.com` is the accessible source.
 
 ### Legistar API status (M12 step 2 — closed: API not viable)
 

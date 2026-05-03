@@ -28,6 +28,7 @@ jobs:
           - bos-public-safety
           - bos-gao
           - hpc
+          - sfmta
           # Note: legislative notices (hearings) are folded into the planning
           # scraper (scraper/sources/planning.ts fetchLegislativeNotices) rather
           # than running as a separate job.

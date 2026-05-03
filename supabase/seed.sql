@@ -9,7 +9,8 @@ insert into sources (id, name, url) values
   ('bos-rules',        'BOS Rules Committee',                                 'https://www.sf.gov/departments--board-supervisors/events/upcoming'),
   ('bos-public-safety','BOS Public Safety and Neighborhood Services Committee','https://www.sf.gov/departments--board-supervisors/events/upcoming'),
   ('bos-gao',          'BOS Government Audit and Oversight Committee',        'https://www.sf.gov/departments--board-supervisors/events/upcoming'),
-  ('hpc',              'SF Historic Preservation Commission',                  'https://sfplanning.org/hearings-historic-preservation-commission')
+  ('hpc',              'SF Historic Preservation Commission',                  'https://sfplanning.org/hearings-historic-preservation-commission'),
+  ('sfmta',            'SFMTA Board of Directors',                             'https://www.sfmta.com/meetings-events')
 on conflict (id) do update set
   name = excluded.name,
   url  = excluded.url;

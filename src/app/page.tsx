@@ -221,7 +221,13 @@ export default async function Home({
       )}
 
       <footer className="border-t border-zinc-200 pt-6 text-xs text-zinc-500 dark:border-zinc-800">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap gap-3">
+            <a href="/neighborhoods" className="underline">Browse by neighborhood</a>
+            <a href="/topics" className="underline">Browse by topic</a>
+            <a href="/analytics" className="underline">Analytics</a>
+            <a href="/about" className="underline">About</a>
+          </div>
           <span>
             Unofficial. Summaries are AI-generated and may be wrong or incomplete. For
             canonical agendas see{' '}
@@ -229,7 +235,6 @@ export default async function Home({
             and{' '}
             <a className="underline" href="https://sfbos.org/meetings" target="_blank" rel="noopener noreferrer">sfbos.org</a>.
           </span>
-          <a href="/about" className="ml-4 shrink-0 underline">About</a>
         </div>
       </footer>
     </main>
