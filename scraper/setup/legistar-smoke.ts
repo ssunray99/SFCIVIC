@@ -1,8 +1,9 @@
 // One-shot smoke test for SF's Legistar Web API. Run with: npm run smoke:legistar.
 //
-// Probes three endpoints in sequence to confirm the API is open and healthy
-// before the team commits to a typed client + BOS migration. No DB writes,
-// no auth, no env vars.
+// SF's `/Events` listing endpoint is misconfigured server-side (HTTP 400 on
+// any query — "'Agenda Draft Status' ... is not setup in settings").
+// This v2 probes whether enough of the rest of the API works to build a
+// Matters-first ingest path that bypasses the broken Events listing.
 
 const BASE = 'https://webapi.legistar.com/v1/sfgov';
 
@@ -13,11 +14,23 @@ type LegistarBody = {
   BodyActiveFlag: number;
 };
 
-type EventRow = {
-  EventId: number;
-  EventDate: string;
-  EventLocation: string | null;
-  EventInSiteURL: string | null;
+type Matter = {
+  MatterId: number;
+  MatterFile: string;
+  MatterName: string | null;
+  MatterTitle: string | null;
+  MatterTypeName: string | null;
+  MatterStatusName: string | null;
+  MatterIntroDate: string | null;
+  MatterBodyId: number | null;
+};
+
+type MatterHistory = {
+  MatterHistoryId: number;
+  MatterHistoryActionDate: string | null;
+  MatterHistoryActionName: string | null;
+  MatterHistoryActionBodyName: string | null;
+  MatterHistoryEventId: number | null;
 };
 
 type EventItem = {
@@ -25,9 +38,16 @@ type EventItem = {
   EventItemMatterId: number | null;
 };
 
-type EventWithItems = EventRow & {
+type EventDetail = {
+  EventId: number;
+  EventDate: string;
+  EventLocation: string | null;
+  EventBodyName: string | null;
+  EventInSiteURL: string | null;
   EventItems?: EventItem[];
 };
+
+type StepResult = { name: string; ok: boolean; note?: string };
 
 async function get<T>(url: string): Promise<T> {
   const resp = await fetch(url, { headers: { Accept: 'application/json' } });
@@ -42,75 +62,146 @@ function pad(s: string, n: number): string {
   return s.length >= n ? s : s + ' '.repeat(n - s.length);
 }
 
-async function step1(): Promise<LegistarBody> {
-  console.log(`\n[step 1] GET ${BASE}/Bodies?$top=200`);
+function shortErr(err: unknown): string {
+  return (err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 200);
+}
+
+async function probeBodies(): Promise<void> {
+  console.log(`\n[A] GET ${BASE}/Bodies?$top=200`);
   const bodies = await get<LegistarBody[]>(`${BASE}/Bodies?$top=200`);
-  const matching = bodies.filter(
-    (b) => b.BodyTypeName === 'Primary Legislative Body' || b.BodyTypeName === 'Standing Committee',
+  console.log(`Received ${bodies.length} bodies.\n`);
+
+  const types = new Map<string, number>();
+  for (const b of bodies) types.set(b.BodyTypeName, (types.get(b.BodyTypeName) ?? 0) + 1);
+
+  console.log(`Distinct BodyTypeName values (sorted by count):`);
+  console.log(`${pad('Count', 8)}BodyTypeName`);
+  console.log('-'.repeat(60));
+  for (const [type, count] of [...types.entries()].sort((a, b) => b[1] - a[1])) {
+    console.log(`${pad(String(count), 8)}${type}`);
+  }
+
+  const bosFamily = bodies.filter(
+    (b) => b.BodyActiveFlag === 1 && /(supervis|committee)/i.test(b.BodyName),
   );
-  console.log(`Received ${bodies.length} bodies; ${matching.length} match the type filter.\n`);
+  console.log(`\n${bosFamily.length} active bodies whose name contains "supervis" or "committee":`);
+  console.log(`${pad('Id', 6)}${pad('TypeName', 32)}BodyName`);
+  console.log('-'.repeat(90));
+  for (const b of bosFamily) {
+    console.log(`${pad(String(b.BodyId), 6)}${pad(b.BodyTypeName, 32)}${b.BodyName}`);
+  }
+}
+
+async function probeMatters(): Promise<Matter | undefined> {
+  const url = `${BASE}/Matters?$top=5&$orderby=${encodeURIComponent('MatterIntroDate desc')}`;
+  console.log(`\n[B] GET ${url}`);
+  const matters = await get<Matter[]>(url);
+  console.log(`Received ${matters.length} matter(s).\n`);
   console.log(
-    `${pad('BodyId', 8)}${pad('BodyTypeName', 28)}${pad('Active', 8)}BodyName`,
+    `${pad('MatterId', 10)}${pad('File', 12)}${pad('Type', 18)}${pad('Status', 24)}${pad('Intro', 12)}Title`,
   );
-  console.log('-'.repeat(80));
-  for (const b of matching) {
+  console.log('-'.repeat(140));
+  for (const m of matters) {
+    const title = ((m.MatterTitle ?? m.MatterName) ?? '').replace(/\s+/g, ' ').slice(0, 60);
     console.log(
-      `${pad(String(b.BodyId), 8)}${pad(b.BodyTypeName, 28)}${pad(String(b.BodyActiveFlag), 8)}${b.BodyName}`,
+      `${pad(String(m.MatterId), 10)}${pad(m.MatterFile ?? '', 12)}${pad((m.MatterTypeName ?? '').slice(0, 16), 18)}${pad((m.MatterStatusName ?? '').slice(0, 22), 24)}${pad((m.MatterIntroDate ?? '').slice(0, 10), 12)}${title}`,
     );
   }
-  if (matching.length === 0) {
-    throw new Error('No Primary Legislative Body or Standing Committee found.');
-  }
-  return matching[0];
+  return matters[0];
 }
 
-async function step2(body: LegistarBody): Promise<EventRow> {
-  const filter = `EventBodyId eq ${body.BodyId} and EventDate ge datetime'2025-01-01'`;
-  const url =
-    `${BASE}/Events?` +
-    `$filter=${encodeURIComponent(filter)}` +
-    `&$top=5&$orderby=${encodeURIComponent('EventDate desc')}`;
-  console.log(`\n[step 2] GET ${url}`);
-  console.log(`(probing body "${body.BodyName}" id=${body.BodyId})`);
-  const events = await get<EventRow[]>(url);
-  console.log(`Received ${events.length} events.\n`);
-  console.log(`${pad('EventId', 10)}${pad('EventDate', 26)}${pad('Location', 30)}URL`);
+async function probeHistories(matterId: number): Promise<number | undefined> {
+  const url = `${BASE}/Matters/${matterId}/Histories?$top=10&$orderby=${encodeURIComponent('MatterHistoryActionDate desc')}`;
+  console.log(`\n[C] GET ${url}`);
+  const hist = await get<MatterHistory[]>(url);
+  console.log(`Received ${hist.length} history record(s).\n`);
+  console.log(`${pad('Date', 14)}${pad('EventId', 10)}${pad('Body', 32)}Action`);
   console.log('-'.repeat(120));
-  for (const e of events) {
+  for (const h of hist) {
     console.log(
-      `${pad(String(e.EventId), 10)}${pad(e.EventDate ?? '', 26)}${pad((e.EventLocation ?? '').slice(0, 28), 30)}${e.EventInSiteURL ?? ''}`,
+      `${pad((h.MatterHistoryActionDate ?? '').slice(0, 10), 14)}${pad(String(h.MatterHistoryEventId ?? '-'), 10)}${pad((h.MatterHistoryActionBodyName ?? '').slice(0, 30), 32)}${h.MatterHistoryActionName ?? ''}`,
     );
   }
-  if (events.length === 0) {
-    throw new Error(`No events returned for body ${body.BodyId} since 2025-01-01.`);
-  }
-  return events[0];
+  const withEvent = hist.find((h) => h.MatterHistoryEventId != null);
+  return withEvent?.MatterHistoryEventId ?? undefined;
 }
 
-async function step3(event: EventRow): Promise<void> {
-  const url = `${BASE}/Events/${event.EventId}?EventItems=1`;
-  console.log(`\n[step 3] GET ${url}`);
-  const detail = await get<EventWithItems>(url);
+async function probeEvent(eventId: number): Promise<void> {
+  const url = `${BASE}/Events/${eventId}?EventItems=1`;
+  console.log(`\n[D] GET ${url}`);
+  const detail = await get<EventDetail>(url);
   const items = detail.EventItems ?? [];
-  const withMatter = items.filter((i) => i.EventItemMatterId !== null && i.EventItemMatterId !== undefined);
-  console.log(`Event ${event.EventId}: ${items.length} EventItems, ${withMatter.length} with non-null EventItemMatterId.`);
+  const withMatter = items.filter((i) => i.EventItemMatterId != null);
+  console.log(
+    `Event ${detail.EventId}: date=${(detail.EventDate ?? '').slice(0, 10) || '?'}, body=${detail.EventBodyName ?? '?'}`,
+  );
+  console.log(`InSiteURL: ${detail.EventInSiteURL ?? '<none>'}`);
+  console.log(`EventItems: ${items.length} total, ${withMatter.length} with non-null EventItemMatterId.`);
 }
 
 async function main() {
-  let stepNum = 0;
+  console.log('== SF Legistar API smoke test (v2) ==');
+  const results: StepResult[] = [];
+
   try {
-    stepNum = 1;
-    const body = await step1();
-    stepNum = 2;
-    const event = await step2(body);
-    stepNum = 3;
-    await step3(event);
-    console.log('\n✅ Legistar API healthy');
+    await probeBodies();
+    results.push({ name: '[A] /Bodies', ok: true });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`\n❌ Failed at step ${stepNum}: ${msg}`);
-    process.exit(1);
+    results.push({ name: '[A] /Bodies', ok: false, note: shortErr(err) });
+    console.error(`\nStep A failed: ${shortErr(err)}`);
   }
+
+  let firstMatter: Matter | undefined;
+  try {
+    firstMatter = await probeMatters();
+    results.push({
+      name: '[B] /Matters',
+      ok: true,
+      note: firstMatter ? `first MatterId=${firstMatter.MatterId} (file ${firstMatter.MatterFile})` : 'empty result',
+    });
+  } catch (err) {
+    results.push({ name: '[B] /Matters', ok: false, note: shortErr(err) });
+    console.error(`\nStep B failed: ${shortErr(err)}`);
+  }
+
+  let firstEventId: number | undefined;
+  if (firstMatter) {
+    try {
+      firstEventId = await probeHistories(firstMatter.MatterId);
+      results.push({
+        name: '[C] /Matters/{id}/Histories',
+        ok: true,
+        note: firstEventId ? `EventId ${firstEventId} discovered` : 'no EventId in any history record',
+      });
+    } catch (err) {
+      results.push({ name: '[C] /Matters/{id}/Histories', ok: false, note: shortErr(err) });
+      console.error(`\nStep C failed: ${shortErr(err)}`);
+    }
+  } else {
+    results.push({ name: '[C] /Matters/{id}/Histories', ok: false, note: 'skipped (no MatterId from B)' });
+  }
+
+  if (firstEventId) {
+    try {
+      await probeEvent(firstEventId);
+      results.push({ name: '[D] /Events/{id} direct', ok: true });
+    } catch (err) {
+      results.push({ name: '[D] /Events/{id} direct', ok: false, note: shortErr(err) });
+      console.error(`\nStep D failed: ${shortErr(err)}`);
+    }
+  } else {
+    results.push({ name: '[D] /Events/{id} direct', ok: false, note: 'skipped (no EventId from C)' });
+  }
+
+  console.log('\n== Summary ==');
+  console.log(`${pad('Step', 32)}${pad('Status', 8)}Note`);
+  console.log('-'.repeat(100));
+  for (const r of results) {
+    console.log(`${pad(r.name, 32)}${pad(r.ok ? 'OK' : 'FAIL', 8)}${r.note ?? ''}`);
+  }
+
+  const allOk = results.every((r) => r.ok);
+  console.log(allOk ? '\nAll probes succeeded.' : '\nSome probes failed or were skipped — see notes.');
 }
 
 main();
