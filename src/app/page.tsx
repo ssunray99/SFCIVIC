@@ -2,6 +2,7 @@ import { Suspense } from 'react';
 import { createServerClient } from '@/lib/supabase/server';
 import { MeetingCard, type MeetingCardData } from '@/components/MeetingCard';
 import { FilterBar } from '@/components/FilterBar';
+import { AddressSearch } from '@/components/AddressSearch';
 import {
   NEIGHBORHOODS,
   TOPICS,
@@ -165,6 +166,7 @@ export default async function Home({
       </header>
 
       <Suspense>
+        <AddressSearch />
         <FilterBar />
       </Suspense>
 
