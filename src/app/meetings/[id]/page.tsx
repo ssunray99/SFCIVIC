@@ -21,7 +21,12 @@ const SELECT = `
     item_type,
     district,
     neighborhoods,
-    topics
+    topics,
+    comment_deadline,
+    comment_email,
+    comment_portal_url,
+    in_person_slot,
+    matter_file_number
   )
 `;
 
