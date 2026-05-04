@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { NEIGHBORHOODS, TOPICS, DISTRICTS, SOURCES } from '@/lib/constants';
 
@@ -17,15 +17,16 @@ const inputClass =
 export function FilterBar() {
   const router = useRouter();
   const params = useSearchParams();
+  const pathname = usePathname();
 
   const update = useCallback(
     (key: string, value: string) => {
       const next = new URLSearchParams(params.toString());
       if (value) next.set(key, value);
       else next.delete(key);
-      router.replace(`/?${next.toString()}`);
+      router.replace(`${pathname}?${next.toString()}`);
     },
-    [params, router],
+    [params, pathname, router],
   );
 
   const neighborhood = params.get('neighborhood') ?? '';
@@ -52,8 +53,8 @@ export function FilterBar() {
     const next = new URLSearchParams(params.toString());
     next.delete('from');
     next.delete('to');
-    router.replace(`/?${next.toString()}`);
-  }, [params, router]);
+    router.replace(`${pathname}?${next.toString()}`);
+  }, [params, pathname, router]);
 
   const active = (
     [
@@ -151,7 +152,7 @@ export function FilterBar() {
               {label} <span aria-hidden="true">×</span>
             </button>
           ))}
-          <a href="/" className="text-xs text-zinc-500 hover:underline dark:text-zinc-400">
+          <a href={pathname} className="text-xs text-zinc-500 hover:underline dark:text-zinc-400">
             Clear all
           </a>
         </div>
