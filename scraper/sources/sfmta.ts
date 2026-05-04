@@ -145,6 +145,7 @@ export async function scrape(): Promise<void> {
       }
 
       if (!agendaText.trim()) agendaText = htmlToText(eventHtml);
+      const textLength = agendaText.length;
       agendaText = agendaText.slice(0, MAX_TEXT_TOTAL);
 
       const needsOcr = agendaText.trim().length < 200;
@@ -191,6 +192,7 @@ export async function scrape(): Promise<void> {
         raw_storage_path: rawStoragePath,
         content_hash: contentHash,
         needs_ocr: needsOcr,
+        text_length: textLength,
       });
 
       if (insertErr) {
@@ -246,7 +248,7 @@ async function collectBoardUrls(
   out: Set<string>,
 ): Promise<void> {
   console.log(`[sfmta] scanning listing: ${listingUrl}`);
-  const MAX_PAGES = 20;
+  const MAX_PAGES = 50;
 
   for (let pageNum = 0; pageNum < MAX_PAGES; pageNum++) {
     const sep = listingUrl.includes('?') ? '&' : '?';

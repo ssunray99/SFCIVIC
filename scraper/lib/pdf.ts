@@ -13,6 +13,19 @@ export type PdfResult = {
 };
 
 export async function extractPdfText(bytes: Buffer): Promise<PdfResult> {
+  // Reject obviously-bad inputs before pdf-parse — its native error
+  // ("stream must have data" / "Invalid PDF structure") is opaque.
+  if (bytes.length === 0) {
+    console.warn('[pdf] empty bytes — skipping parse');
+    return { text: '', needsOcr: true };
+  }
+  if (!bytes.subarray(0, 5).equals(Buffer.from('%PDF-'))) {
+    console.warn(
+      `[pdf] not a PDF (${bytes.length} bytes, first 8: ${bytes.subarray(0, 8).toString('hex')})`,
+    );
+    return { text: '', needsOcr: true };
+  }
+
   try {
     const data = await pdfParse(bytes);
     const text = data.text.trim();
@@ -23,7 +36,8 @@ export async function extractPdfText(bytes: Buffer): Promise<PdfResult> {
       needsOcr: text.length < MIN_TEXT_LENGTH,
     };
   } catch (err) {
-    console.warn('[pdf] parse error:', err instanceof Error ? err.message : String(err));
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[pdf] parse error (${bytes.length} bytes): ${msg}`);
     return { text: '', needsOcr: true };
   }
 }
