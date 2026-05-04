@@ -1,6 +1,12 @@
-import { Badge } from './Badge';
-import { ItemCard, type ItemCardData } from './ItemCard';
-import { SOURCES } from '@/lib/constants';
+// Outer card for a single meeting. Header (source pill + date + relative-day
+// badge + serif title + agenda link) + a stack of ItemSubCards below. The
+// ActionCallout shows on at most one item per meeting — the first with
+// public-comment fields, falling back to the second item on upcoming meetings
+// when no item is flagged.
+
+import { fmtDate, relativeDay } from '@/lib/format';
+import { SourcePill } from './primitives';
+import { ItemSubCard, type ItemSubCardData } from './ItemSubCard';
 
 export type MeetingCardData = {
   id: string;
@@ -9,69 +15,89 @@ export type MeetingCardData = {
   meeting_date: string;
   agenda_url: string | null;
   needs_ocr: boolean;
-  agenda_items: ItemCardData[];
+  meeting_time?: string | null;
+  location?: string | null;
+  agenda_items: ItemSubCardData[];
 };
 
-const sourceName = (id: string) =>
-  SOURCES.find((s) => s.id === id)?.name ?? id;
+const hasActionFields = (i: ItemSubCardData) =>
+  i.comment_deadline != null ||
+  i.comment_email != null ||
+  i.comment_portal_url != null ||
+  i.in_person_slot != null;
 
-const formatDate = (iso: string) =>
-  new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
+function pickActionItemId(items: ItemSubCardData[], upcoming: boolean): string | null {
+  const flagged = items.find(hasActionFields);
+  if (flagged) return flagged.id;
+  if (upcoming && items.length >= 2) return items[1].id;
+  return null;
+}
 
 export function MeetingCard({
   meeting,
   filterItems,
 }: {
   meeting: MeetingCardData;
-  filterItems?: (item: ItemCardData) => boolean;
+  filterItems?: (item: ItemSubCardData) => boolean;
 }) {
-  const items = [...(filterItems ? meeting.agenda_items.filter(filterItems) : meeting.agenda_items)].sort((a, b) => {
+  const items = [
+    ...(filterItems ? meeting.agenda_items.filter(filterItems) : meeting.agenda_items),
+  ].sort((a, b) => {
     const ap = a.position ?? Number.MAX_SAFE_INTEGER;
     const bp = b.position ?? Number.MAX_SAFE_INTEGER;
     return ap - bp;
   });
+
   const today = new Date().toISOString().slice(0, 10);
   const upcoming = meeting.meeting_date >= today;
+  const rel = relativeDay(meeting.meeting_date);
+  const actionItemId = pickActionItemId(items, upcoming);
 
+  // Compact one-liner for meetings with no content yet — keeps the list
+  // scannable instead of repeating big card headers for empty agendas.
   if (items.length === 0) {
     const cancelled = /\bcancell?ed\b/i.test(meeting.title);
     const placeholder = cancelled
       ? 'Cancelled'
       : meeting.needs_ocr
-        ? 'Scanned PDF — OCR pending'
-        : 'Agenda not yet posted';
+      ? 'OCR pending'
+      : 'Agenda not posted';
     return (
       <a
         href={`/meetings/${meeting.id}`}
-        className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-zinc-200 bg-zinc-50/30 px-3 py-2 text-xs hover:bg-zinc-100/60 dark:border-zinc-800 dark:bg-zinc-900/20 dark:hover:bg-zinc-900/60"
+        className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[6px] border border-[var(--rule)] bg-[var(--paper)] px-4 py-2.5 text-[13px] hover:bg-[var(--paper-2)] transition-colors"
       >
-        <Badge variant="source">{sourceName(meeting.source_id)}</Badge>
-        <time className="text-zinc-500 dark:text-zinc-400">
-          {formatDate(meeting.meeting_date)}
-        </time>
-        <span className="min-w-0 flex-1 truncate text-zinc-700 dark:text-zinc-300">
-          {meeting.title}
+        <SourcePill sourceId={meeting.source_id} />
+        <time className="text-[var(--ink-2)]">{fmtDate(meeting.meeting_date)}</time>
+        {rel && (
+          <span className="font-mono uppercase text-[11px] tracking-[0.16em] text-[var(--accent)]">
+            {rel}
+          </span>
+        )}
+        <span className="min-w-0 flex-1 truncate text-[var(--ink)]">{meeting.title}</span>
+        <span className="font-mono uppercase text-[11px] tracking-[0.14em] text-[var(--ink-3)]">
+          {placeholder}
         </span>
-        <span className="text-zinc-400 dark:text-zinc-500">{placeholder}</span>
       </a>
     );
   }
 
   return (
-    <section className="flex flex-col gap-4 rounded-lg border border-zinc-200 bg-zinc-50/50 p-5 dark:border-zinc-800 dark:bg-zinc-900/40">
-      <header className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <Badge variant="source">{sourceName(meeting.source_id)}</Badge>
-          <time className="text-zinc-500 dark:text-zinc-400">
-            {formatDate(meeting.meeting_date)}
-          </time>
+    <section className="flex flex-col rounded-[8px] border border-[var(--rule)] bg-[var(--paper)]">
+      <header className="px-6 pt-5 pb-3 flex flex-col gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5 text-[13px] text-[var(--ink-2)]">
+          <SourcePill sourceId={meeting.source_id} />
+          <time>{fmtDate(meeting.meeting_date)}</time>
+          {rel && (
+            <span className="font-mono uppercase text-[11px] tracking-[0.16em] text-[var(--accent)]">
+              {rel}
+            </span>
+          )}
         </div>
-        <h2 className="text-base font-semibold leading-snug">
+        <h2
+          className="font-serif font-medium leading-tight text-[var(--ink)]"
+          style={{ fontSize: 24 }}
+        >
           <a href={`/meetings/${meeting.id}`} className="hover:underline">
             {meeting.title}
           </a>
@@ -81,16 +107,23 @@ export function MeetingCard({
             href={meeting.agenda_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs text-sky-700 hover:underline dark:text-sky-400"
+            className="text-[13px] text-[var(--accent)] hover:underline w-fit"
           >
             Original agenda ↗
           </a>
         )}
       </header>
 
-      <div className="flex flex-col gap-2">
+      <div className="px-6 pb-6 flex flex-col gap-3.5">
         {items.map((item) => (
-          <ItemCard key={item.id} item={item} meetingUpcoming={upcoming} />
+          <ItemSubCard
+            key={item.id}
+            item={item}
+            showAction={item.id === actionItemId}
+            meetingDate={meeting.meeting_date}
+            meetingTime={meeting.meeting_time}
+            meetingLocation={meeting.location}
+          />
         ))}
       </div>
     </section>

@@ -1,8 +1,9 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { createServerClient } from '@/lib/supabase/server';
-import { SOURCES } from '@/lib/constants';
-import { Badge } from '@/components/Badge';
-import { ItemCard, type ItemCardData } from '@/components/ItemCard';
+import { ItemSubCard, type ItemSubCardData } from '@/components/ItemSubCard';
+import { Eyebrow, SectionRule, SourcePill } from '@/components/primitives';
+import { fmtDateLong } from '@/lib/format';
 
 export const revalidate = 300;
 
@@ -33,16 +34,7 @@ type LegislationHistory = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = (supabase: ReturnType<typeof createServerClient>) => supabase as any;
 
-const formatDate = (iso: string | null) => {
-  if (!iso) return null;
-  return new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-US', {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
-};
-
-const sourceName = (id: string) => SOURCES.find((s) => s.id === id)?.name ?? id;
+const fmtOrNull = (iso: string | null) => (iso ? fmtDateLong(iso) : null);
 
 export async function generateMetadata({
   params,
@@ -51,11 +43,11 @@ export async function generateMetadata({
 }) {
   const { fileNumber } = await params;
   const supabase = createServerClient();
-  const { data } = await db(supabase)
+  const { data } = (await db(supabase)
     .from('legislation')
     .select('title')
     .eq('matter_file_number', fileNumber)
-    .maybeSingle() as { data: Pick<Legislation, 'title'> | null };
+    .maybeSingle()) as { data: Pick<Legislation, 'title'> | null };
 
   const label = data?.title ?? `File #${fileNumber}`;
   return {
@@ -82,10 +74,13 @@ export default async function ProjectPage({
       .from('legislation_history')
       .select('*')
       .eq('matter_file_number', fileNumber)
-      .order('action_date', { ascending: false }) as Promise<{ data: LegislationHistory[] | null }>,
+      .order('action_date', { ascending: false }) as Promise<{
+      data: LegislationHistory[] | null;
+    }>,
     supabase
       .from('agenda_items')
-      .select(`
+      .select(
+        `
         id,
         position,
         title,
@@ -98,30 +93,35 @@ export default async function ProjectPage({
         comment_email,
         comment_portal_url,
         in_person_slot,
+        matter_file_number,
         meeting_id,
         meetings (
           id,
           source_id,
           title,
           meeting_date,
+          meeting_time,
+          location,
           agenda_url
         )
-      `)
+      `,
+      )
       .eq('matter_file_number', fileNumber)
       .order('id'),
   ]);
 
-  // If neither legislation metadata nor any appearances exist, 404.
   const legislation = legislationRes.data;
   const history = historyRes.data ?? [];
   const appearances = (appearancesRes.data ?? []) as Array<
-    ItemCardData & {
+    ItemSubCardData & {
       meeting_id: string;
       meetings: {
         id: string;
         source_id: string;
         title: string;
         meeting_date: string;
+        meeting_time: string | null;
+        location: string | null;
         agenda_url: string | null;
       } | null;
     }
@@ -134,43 +134,64 @@ export default async function ProjectPage({
     legislation?.title && legislation.title.toLowerCase() !== 'legislation details'
       ? legislation.title
       : null;
-  const displayTitle = legislationTitle ?? appearances[0]?.title ?? `File #${fileNumber}`;
+  const displayTitle =
+    legislationTitle ?? appearances[0]?.title ?? `File #${fileNumber}`;
 
   // Sort appearances by meeting date descending.
   const sortedAppearances = [...appearances].sort((a, b) => {
     const da = a.meetings?.meeting_date ?? '';
-    const db = b.meetings?.meeting_date ?? '';
-    return db.localeCompare(da);
+    const dbDate = b.meetings?.meeting_date ?? '';
+    return dbDate.localeCompare(da);
   });
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-12">
-      <a href="/" className="text-sm text-zinc-500 hover:underline dark:text-zinc-400">
+    <main className="mx-auto max-w-7xl px-10 py-10 flex flex-col gap-7">
+      <Link
+        href="/meetings"
+        className="font-mono uppercase text-[11px] tracking-[0.16em] text-[var(--ink-3)] hover:text-[var(--ink-2)] w-fit"
+      >
         ← All meetings
-      </a>
+      </Link>
 
       <header className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <Badge variant="muted">File #{fileNumber}</Badge>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-[var(--ink-3)]">
+            FILE № {fileNumber}
+          </span>
           {legislation?.matter_type && (
-            <Badge variant="muted">{legislation.matter_type}</Badge>
+            <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-[var(--ink-2)] border border-[var(--rule)] rounded-full px-2.5 py-0.5">
+              {legislation.matter_type}
+            </span>
           )}
           {legislation?.status && (
-            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
+            <span
+              className="rounded-full px-3 py-0.5 text-[12.5px]"
+              style={{
+                background: 'oklch(0.92 0.07 150)',
+                color: 'oklch(0.38 0.10 150)',
+              }}
+            >
               {legislation.status}
             </span>
           )}
         </div>
-        <h1 className="text-2xl font-semibold leading-snug">{displayTitle}</h1>
+        <h1
+          className="font-serif tracking-tight text-[var(--ink)] leading-tight"
+          style={{ fontSize: 38, fontWeight: 500 }}
+        >
+          {displayTitle}
+        </h1>
         {legislation?.sponsor && (
-          <p className="text-sm text-zinc-500">Sponsor: {legislation.sponsor}</p>
+          <p className="text-[14px] text-[var(--ink-2)]">
+            Sponsor: <span className="text-[var(--ink)]">{legislation.sponsor}</span>
+          </p>
         )}
-        <div className="flex flex-wrap gap-4 text-xs text-zinc-500">
+        <div className="flex flex-wrap gap-x-5 gap-y-1 text-[13px] text-[var(--ink-2)]">
           {legislation?.intro_date && (
-            <span>Introduced {formatDate(legislation.intro_date)}</span>
+            <span>Introduced {fmtOrNull(legislation.intro_date)}</span>
           )}
           {legislation?.final_action_date && (
-            <span>Final action {formatDate(legislation.final_action_date)}</span>
+            <span>Final action {fmtOrNull(legislation.final_action_date)}</span>
           )}
           {legislation?.current_body && (
             <span>Currently at {legislation.current_body}</span>
@@ -181,44 +202,56 @@ export default async function ProjectPage({
             href={legislation.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="w-fit text-xs text-sky-700 underline hover:no-underline dark:text-sky-400"
+            className="text-[13px] text-[var(--accent)] hover:underline w-fit"
           >
             View on Legistar ↗
           </a>
         )}
         {!legislation && (
-          <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          <p
+            className="rounded-[6px] px-3 py-2 text-[13px]"
+            style={{
+              background: 'oklch(0.97 0.05 95)',
+              border: '1px solid oklch(0.84 0.10 90)',
+              color: 'oklch(0.46 0.13 65)',
+            }}
+          >
             Legistar metadata not yet enriched for this matter. Run{' '}
-            <code>npm run enrich:legislation</code> to populate.
+            <code className="font-mono">npm run enrich:legislation</code> to populate.
           </p>
         )}
       </header>
 
       {sortedAppearances.length > 0 && (
         <section className="flex flex-col gap-4">
-          <h2 className="text-lg font-medium">
-            Committee appearances ({sortedAppearances.length})
-          </h2>
-          <div className="flex flex-col gap-4">
+          <SectionRule
+            label="Committee appearances"
+            count={sortedAppearances.length}
+          />
+          <div className="flex flex-col gap-5">
             {sortedAppearances.map((item) => {
               const meeting = item.meetings;
-              const today = new Date().toISOString().slice(0, 10);
-              const meetingUpcoming = meeting ? meeting.meeting_date >= today : false;
               return (
-                <div key={item.id} className="flex flex-col gap-2">
+                <div key={item.id} className="flex flex-col gap-2.5">
                   {meeting && (
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-                      <Badge variant="source">{sourceName(meeting.source_id)}</Badge>
-                      <time>{formatDate(meeting.meeting_date)}</time>
-                      <a
+                    <div className="flex flex-wrap items-center gap-2.5 text-[13px] text-[var(--ink-2)]">
+                      <SourcePill sourceId={meeting.source_id} />
+                      <time>{fmtDateLong(meeting.meeting_date)}</time>
+                      <Link
                         href={`/meetings/${meeting.id}`}
-                        className="text-sky-700 underline dark:text-sky-400"
+                        className="text-[var(--accent)] hover:underline"
                       >
                         View full meeting →
-                      </a>
+                      </Link>
                     </div>
                   )}
-                  <ItemCard item={item} meetingUpcoming={meetingUpcoming} />
+                  <ItemSubCard
+                    item={item}
+                    showAction={false}
+                    meetingDate={meeting?.meeting_date ?? ''}
+                    meetingTime={meeting?.meeting_time}
+                    meetingLocation={meeting?.location}
+                  />
                 </div>
               );
             })}
@@ -228,27 +261,34 @@ export default async function ProjectPage({
 
       {history.length > 0 && (
         <section className="flex flex-col gap-4">
-          <h2 className="text-lg font-medium">Legislative history</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
+          <SectionRule label="Legislative history" />
+          <div className="overflow-x-auto rounded-[8px] border border-[var(--rule)]">
+            <table className="w-full text-[13px]">
               <thead>
-                <tr className="border-b border-zinc-200 text-left dark:border-zinc-700">
-                  <th className="pb-2 pr-4 font-medium text-zinc-500">Date</th>
-                  <th className="pb-2 pr-4 font-medium text-zinc-500">Action</th>
-                  <th className="pb-2 pr-4 font-medium text-zinc-500">Committee</th>
-                  <th className="pb-2 font-medium text-zinc-500">Result</th>
+                <tr className="border-b border-[var(--rule)] text-left bg-[var(--paper-2)]">
+                  <th className="px-4 py-2.5 font-medium text-[var(--ink-3)]">
+                    <Eyebrow>Date</Eyebrow>
+                  </th>
+                  <th className="px-4 py-2.5 font-medium text-[var(--ink-3)]">
+                    <Eyebrow>Action</Eyebrow>
+                  </th>
+                  <th className="px-4 py-2.5 font-medium text-[var(--ink-3)]">
+                    <Eyebrow>Committee</Eyebrow>
+                  </th>
+                  <th className="px-4 py-2.5 font-medium text-[var(--ink-3)]">
+                    <Eyebrow>Result</Eyebrow>
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {history.map((h) => (
-                  <tr
-                    key={h.id}
-                    className="border-b border-zinc-100 dark:border-zinc-800"
-                  >
-                    <td className="py-2 pr-4 text-zinc-500">{formatDate(h.action_date)}</td>
-                    <td className="py-2 pr-4">{h.action ?? '—'}</td>
-                    <td className="py-2 pr-4 text-zinc-500">{h.body ?? '—'}</td>
-                    <td className="py-2 text-zinc-500">{h.result ?? '—'}</td>
+                  <tr key={h.id} className="border-b border-[var(--rule)] last:border-b-0">
+                    <td className="px-4 py-2.5 text-[var(--ink-2)] whitespace-nowrap">
+                      {fmtOrNull(h.action_date)}
+                    </td>
+                    <td className="px-4 py-2.5 text-[var(--ink)]">{h.action ?? '—'}</td>
+                    <td className="px-4 py-2.5 text-[var(--ink-2)]">{h.body ?? '—'}</td>
+                    <td className="px-4 py-2.5 text-[var(--ink-2)]">{h.result ?? '—'}</td>
                   </tr>
                 ))}
               </tbody>
@@ -256,11 +296,6 @@ export default async function ProjectPage({
           </div>
         </section>
       )}
-
-      <footer className="border-t border-zinc-200 pt-6 text-xs text-zinc-500 dark:border-zinc-800">
-        Unofficial. Committee appearances are from AI-extracted agenda summaries and may be
-        incomplete. Legislative history is from sfgov.legistar.com.
-      </footer>
     </main>
   );
 }

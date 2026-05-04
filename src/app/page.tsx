@@ -1,16 +1,17 @@
-// Homepage — sleek, three-section landing.
-//   1. Hero: ask anything (Claude-powered conversational search → /ask)
-//   2. Explore: curated topic + neighborhood chips, plus address search
-//   3. Browse: link cards for upcoming and past meetings (with live counts)
+// Editorial home page. Three sections separated by gap-16:
+//   1. Hero — wordmark + tagline + Ask form (client island)
+//   2. Explore — By topic / By neighborhood with address search card
+//   3. Browse meetings — Upcoming / Past tiles with live counts
 
 import Link from 'next/link';
 import { createServerClient } from '@/lib/supabase/server';
-import { AskInput } from '@/components/AskInput';
+import { HeroAsk } from '@/components/HeroAsk';
 import { AddressSearch } from '@/components/AddressSearch';
+import { Eyebrow, Pill, SectionRule } from '@/components/primitives';
+import { NEIGHBORHOODS, TOPICS } from '@/lib/constants';
 
 export const revalidate = 300;
 
-// Curated subsets — the full lists are reachable via the "See all" links.
 const FEATURED_TOPICS = [
   'housing',
   'zoning',
@@ -33,10 +34,8 @@ const FEATURED_NEIGHBORHOODS = [
   'Outer Sunset',
 ] as const;
 
-// Mirrors toSlug() in /neighborhoods/[slug]/page.tsx — lowercase, spaces→dashes,
-// strip anything else. Without the final replace, names like "St. Francis Wood"
-// would diverge between the two slug functions.
-const slugify = (n: string) => n.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+const humanize = (s: string) =>
+  s.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
 async function getMeetingCounts(): Promise<{ upcoming: number; past: number }> {
   const supabase = createServerClient();
@@ -52,136 +51,98 @@ export default async function Home() {
   const counts = await getMeetingCounts();
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-14 px-6 py-12">
-      {/* Hero */}
-      <section className="flex flex-col gap-5 pt-6">
-        <div className="flex flex-col gap-2">
-          <h1 className="text-4xl font-semibold tracking-tight">SF Civic Tracker</h1>
-          <p className="text-base text-zinc-600 dark:text-zinc-400">
-            Explore and search across the San Francisco civic process for topics and
-            neighborhoods you care about.
-          </p>
-        </div>
-        <AskInput size="lg" />
-        <div className="flex flex-wrap gap-2 text-xs text-zinc-500 dark:text-zinc-400">
-          <span>Try:</span>
-          {[
-            "what's happening with housing in the Mission?",
-            'budget items this month',
-            'transit projects in District 6',
-          ].map((s) => (
-            <Link
-              key={s}
-              href={`/ask?q=${encodeURIComponent(s)}`}
-              className="rounded-full border border-zinc-200 px-2 py-0.5 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"
-            >
-              {s}
-            </Link>
-          ))}
-        </div>
-      </section>
+    <main className="px-10 py-10 flex flex-col gap-16">
+      <HeroAsk />
 
-      {/* Explore */}
-      <section className="flex flex-col gap-5">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-lg font-medium">Explore</h2>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
-            <span className="uppercase tracking-wide">Topics</span>
-            <Link href="/topics" className="hover:underline">
-              See all →
-            </Link>
+      {/* Explore — By neighborhood (+ address card) / By topic */}
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-12">
+        <div className="flex flex-col gap-5">
+          <div>
+            <SectionRule label="Explore by neighborhood" />
+            <div className="flex flex-wrap gap-2">
+              {FEATURED_NEIGHBORHOODS.map((n) => (
+                <Pill key={n} href={`/meetings?neighborhood=${encodeURIComponent(n)}&view=all`}>
+                  {n}
+                </Pill>
+              ))}
+              <Pill accent href="/neighborhoods">
+                + all {NEIGHBORHOODS.length} →
+              </Pill>
+            </div>
           </div>
+
+          <div className="bg-[var(--paper-2)] border border-[var(--rule)] rounded-[6px] p-5 flex flex-col gap-2.5">
+            <Eyebrow>Find by address</Eyebrow>
+            <p className="text-[14.5px] text-[var(--ink-2)] leading-relaxed">
+              Enter an SF address to see what&rsquo;s on the agenda for that
+              neighborhood and district.
+            </p>
+            <AddressSearch />
+          </div>
+        </div>
+
+        <div>
+          <SectionRule label="Explore by topic" />
           <div className="flex flex-wrap gap-2">
             {FEATURED_TOPICS.map((t) => (
-              <Link
-                key={t}
-                href={`/topics/${t}`}
-                className="rounded-full bg-zinc-100 px-3 py-1 text-sm capitalize text-zinc-800 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
-              >
-                {t.replace('-', ' ')}
-              </Link>
+              <Pill key={t} href={`/meetings?topic=${t}&view=all`}>
+                {humanize(t)}
+              </Pill>
             ))}
+            <Pill accent href="/topics">
+              + all {TOPICS.length} →
+            </Pill>
           </div>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400">
-            <span className="uppercase tracking-wide">Neighborhoods</span>
-            <Link href="/neighborhoods" className="hover:underline">
-              See all →
-            </Link>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {FEATURED_NEIGHBORHOODS.map((n) => (
-              <Link
-                key={n}
-                href={`/neighborhoods/${slugify(n)}`}
-                className="rounded-full bg-zinc-100 px-3 py-1 text-sm text-zinc-800 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
-              >
-                {n}
-              </Link>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-2 rounded-md border border-zinc-200 bg-zinc-50/50 p-4 dark:border-zinc-800 dark:bg-zinc-900/40">
-          <div className="text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-            Find by address
-          </div>
-          <p className="text-xs text-zinc-600 dark:text-zinc-400">
-            Enter an SF address to see what&rsquo;s on the agenda for that neighborhood and district.
-          </p>
-          <AddressSearch />
         </div>
       </section>
 
-      {/* Browse meetings */}
+      {/* Browse meetings — hairline-divided 2-up tiles */}
       <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-medium">Browse meetings</h2>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Link
+        <SectionRule label="Browse meetings" />
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-[var(--rule)] border border-[var(--rule)] rounded-[8px] overflow-hidden">
+          <BrowseTile
+            count={counts.upcoming}
+            label="Upcoming meetings"
+            subtitle="Hearings, ordinances, and votes coming up."
             href="/meetings"
-            className="flex flex-col gap-1 rounded-lg border border-zinc-200 p-5 hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
-          >
-            <div className="text-2xl font-semibold tabular-nums">{counts.upcoming}</div>
-            <div className="text-sm font-medium">Upcoming meetings</div>
-            <div className="text-xs text-zinc-500 dark:text-zinc-400">
-              Hearings, ordinances, and votes coming up.
-            </div>
-          </Link>
-          <Link
+          />
+          <BrowseTile
+            count={counts.past}
+            label="Past meetings"
+            subtitle="Agendas and outcomes from prior sessions."
             href="/meetings?view=past"
-            className="flex flex-col gap-1 rounded-lg border border-zinc-200 p-5 hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
-          >
-            <div className="text-2xl font-semibold tabular-nums">{counts.past}</div>
-            <div className="text-sm font-medium">Past meetings</div>
-            <div className="text-xs text-zinc-500 dark:text-zinc-400">
-              Agendas and outcomes from prior sessions.
-            </div>
-          </Link>
-        </div>
-        <div className="flex flex-wrap gap-3 text-xs">
-          <Link href="/about" className="text-zinc-500 underline hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200">
-            About
-          </Link>
+          />
         </div>
       </section>
-
-      <footer className="mt-auto border-t border-zinc-200 pt-6 text-xs text-zinc-500 dark:border-zinc-800">
-        Unofficial. Summaries are AI-generated and may be wrong or incomplete. For
-        canonical agendas see{' '}
-        <a className="underline" href="https://sfplanning.org/hearings-commission" target="_blank" rel="noopener noreferrer">
-          sfplanning.org
-        </a>{' '}
-        and{' '}
-        <a className="underline" href="https://sfbos.org/meetings" target="_blank" rel="noopener noreferrer">
-          sfbos.org
-        </a>
-        .
-      </footer>
     </main>
+  );
+}
+
+function BrowseTile({
+  count,
+  label,
+  subtitle,
+  href,
+}: {
+  count: number;
+  label: string;
+  subtitle: string;
+  href: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="bg-[var(--paper)] hover:bg-[var(--paper-2)] p-8 flex flex-col gap-3 text-left transition-colors"
+    >
+      <div
+        className="font-serif tabular-nums text-[var(--ink)]"
+        style={{ fontSize: 72, lineHeight: 1, fontWeight: 500 }}
+      >
+        {count}
+      </div>
+      <Eyebrow>{label}</Eyebrow>
+      <p className="text-[15.5px] text-[var(--ink-2)] leading-relaxed">{subtitle}</p>
+      <span className="mt-auto font-mono uppercase text-[12px] tracking-[0.16em] text-[var(--accent)]">View all →</span>
+    </Link>
   );
 }

@@ -1,17 +1,11 @@
 'use client';
 
+// Bordered Ask form used on the /ask page (and re-exported for any future
+// inline placement). Mirrors the home HeroAsk form style but smaller and
+// without the rotating placeholder. Submitting routes to /ask?q=<value>.
+
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-
-const inputClass =
-  'w-full rounded-md border border-zinc-300 bg-white px-4 py-3 text-base text-zinc-800 shadow-sm ' +
-  'placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-500 ' +
-  'dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder-zinc-500';
-
-const buttonClass =
-  'shrink-0 rounded-md bg-sky-600 px-4 py-3 text-sm font-medium text-white shadow-sm ' +
-  'hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-500 ' +
-  'disabled:opacity-50 dark:bg-sky-500 dark:hover:bg-sky-400';
 
 export function AskInput({
   initial = '',
@@ -34,28 +28,35 @@ export function AskInput({
     router.push(`/ask?q=${encodeURIComponent(q)}`);
   }
 
-  const sized =
-    size === 'lg'
-      ? 'px-5 py-4 text-lg'
-      : '';
+  const inputSize = size === 'lg' ? 19 : 17;
+  const inputPad = size === 'lg' ? 'py-4' : 'py-3.5';
 
   return (
-    <form onSubmit={handleSubmit} className="flex w-full gap-2">
+    <form
+      onSubmit={handleSubmit}
+      className="flex w-full items-stretch border-2 border-[var(--ink)] bg-[var(--paper)]"
+    >
+      <div className="flex items-center border-r-2 border-[var(--ink)] px-4">
+        <span className="font-mono uppercase text-[11px] tracking-[0.2em] text-[var(--ink)]">
+          Ask
+        </span>
+      </div>
       <input
         type="text"
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        placeholder="Ask anything about SF civic activity…"
-        className={`${inputClass} ${sized}`}
+        placeholder="Ask a question…"
+        className={`flex-1 bg-transparent px-5 ${inputPad} font-serif text-[var(--ink)] placeholder:italic placeholder:text-[var(--ink-3)] outline-none`}
+        style={{ fontSize: inputSize }}
         aria-label="Ask"
         autoFocus={autoFocus}
       />
       <button
         type="submit"
-        className={`${buttonClass} ${size === 'lg' ? 'px-5 py-4 text-base' : ''}`}
         disabled={submitting || !value.trim()}
+        className="px-6 font-mono uppercase text-[12px] tracking-[0.18em] bg-[var(--accent)] text-[var(--paper)] disabled:opacity-60"
       >
-        {submitting ? 'Asking…' : 'Ask'}
+        Ask&nbsp;&nbsp;→
       </button>
     </form>
   );
