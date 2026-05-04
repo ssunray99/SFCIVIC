@@ -6,6 +6,7 @@ import { scrape as scrapeBosRules } from './sources/bos-rules.ts';
 import { scrape as scrapeBosPublicSafety } from './sources/bos-public-safety.ts';
 import { scrape as scrapeBosGao } from './sources/bos-gao.ts';
 import { scrape as scrapeHpc, extractExisting as extractHpc } from './sources/hpc.ts';
+import { scrape as scrapeSfmta } from './sources/sfmta.ts';
 import { closeBrowser } from './lib/playwright.ts';
 
 // CLI usage:
@@ -18,6 +19,7 @@ import { closeBrowser } from './lib/playwright.ts';
 //   tsx scraper/run.ts bos-public-safety  → scrape Public Safety Committee only
 //   tsx scraper/run.ts bos-gao            → scrape Government Audit and Oversight Committee only
 //   tsx scraper/run.ts hpc                → scrape Historic Preservation Commission only
+//   tsx scraper/run.ts sfmta              → scrape SFMTA Board of Directors only
 //   tsx scraper/run.ts extract            → run LLM extraction on unprocessed meetings
 const filter = process.argv[2]?.toLowerCase();
 
@@ -30,6 +32,7 @@ const sources: Array<{ id: string; fn: () => Promise<void> }> = [
   { id: 'bos-public-safety', fn: scrapeBosPublicSafety },
   { id: 'bos-gao',          fn: scrapeBosGao },
   { id: 'hpc',              fn: scrapeHpc },
+  { id: 'sfmta',            fn: scrapeSfmta },
 ];
 
 async function main() {

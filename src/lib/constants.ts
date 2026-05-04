@@ -77,5 +77,6 @@ export const SOURCES = [
   { id: 'bos-gao',           name: 'BOS Government Audit & Oversight' },
   { id: 'hpc',               name: 'SF Historic Preservation Commission' },
   { id: 'hearings',          name: 'SF Public Hearing Notices' },
+  { id: 'sfmta',             name: 'SFMTA Board of Directors' },
 ] as const;
 export type SourceId = (typeof SOURCES)[number]['id'];
