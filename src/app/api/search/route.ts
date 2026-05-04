@@ -163,6 +163,10 @@ function validate(raw: unknown): ParseResult | null {
 }
 
 export async function GET(req: Request) {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return Response.json({ error: 'search unavailable' }, { status: 503 });
+  }
+
   const { searchParams } = new URL(req.url);
   const q = searchParams.get('q')?.trim();
   if (!q) return Response.json({ error: 'q required' }, { status: 400 });
