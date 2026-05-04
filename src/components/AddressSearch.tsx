@@ -51,6 +51,7 @@ export function AddressSearch() {
       const next = new URLSearchParams();
       if (neighborhood) next.set('neighborhood', neighborhood);
       if (district != null) next.set('district', String(district));
+      next.set('view', 'all');
 
       router.push(`/meetings?${next.toString()}`);
     } catch {
