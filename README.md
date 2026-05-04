@@ -23,12 +23,12 @@ hearing notices. **M13 complete.** Browse-by-neighborhood (`/neighborhoods/[slug
 and browse-by-topic (`/topics/[slug]`) pages with static pre-generation.
 **M15 (analytics) complete.** `/analytics` page shows year-to-date item
 counts by neighborhood, topic, district, and source; cross-committee matter
-tracking; scraper health table. **M14 infrastructure complete** — `legislation`
-table (migration 0004), Legistar HTML enrichment scraper
-(`scraper/setup/legistar-html-enrich.ts`), and `/projects/[fileNumber]` page
-are all built. Run `npm run enrich:legislation` to populate Legistar metadata
-for matter file numbers extracted from BOS agendas. Supervisor vote/attendance
-accountability views require a data source not yet identified.
+tracking; scraper health table. **M14 complete** — `legislation` table (migration 0004), Legistar HTML
+enrichment scraper (`scraper/setup/legistar-html-enrich.ts`), and
+`/projects/[fileNumber]` page are all live; 190 BOS matters enriched from
+`sfgov.legistar.com`. Re-run `npm run enrich:legislation` periodically as
+new file numbers accumulate. Supervisor vote/attendance accountability views
+require a data source not yet identified.
 
 | M   | Goal                                                              | State |
 | --- | ----------------------------------------------------------------- | ----- |
@@ -45,7 +45,7 @@ accountability views require a data source not yet identified.
 | M11 | Address search UI (foreground for users)                          | ✅    |
 | M12 | Source expansion (HPC ✅, BOS committees ✅, SFMTA ✅)             | ✅    |
 | M13 | Browse-by-neighborhood / browse-by-topic pages                    | ✅    |
-| M14 | Project tracking (infra ✅; run enrich:legislation to populate)   | 🔄    |
+| M14 | Project tracking (legislation table + /projects/[id] + enrichment) | ✅    |
 | M15 | Analytics ✅; supervisor vote/accountability needs data source    | 🔄    |
 
 Architectural detail for M11–M15 lives in `CLAUDE.md` under "Planned
