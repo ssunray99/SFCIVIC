@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SFCIVIC — Editorial Redesign</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;0,600;1,400;1,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<style>
+  :root {
+    --paper:   oklch(0.975 0.018 75);
+    --paper-2: oklch(0.945 0.022 70);
+    --ink:    oklch(0.22 0.022 60);
+    --ink-2:  oklch(0.44 0.020 60);
+    --ink-3:  oklch(0.62 0.018 60);
+    --rule:   oklch(0.84 0.022 65);
+    --accent: oklch(0.60 0.18 40);
+    --accent-soft: oklch(0.92 0.05 45);
+    --font-serif: 'Newsreader', Georgia, 'Times New Roman', serif;
+    --font-sans:  'Inter Tight', 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+    --font-mono:  'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  /* Cool palette */
+  body[data-palette="cool"] {
+    --paper:   oklch(0.985 0.004 240);
+    --paper-2: oklch(0.96 0.006 240);
+    --ink:    oklch(0.22 0.020 240);
+    --ink-2:  oklch(0.45 0.012 240);
+    --ink-3:  oklch(0.62 0.010 240);
+    --rule:   oklch(0.86 0.008 240);
+    --accent: oklch(0.55 0.14 230);
+    --accent-soft: oklch(0.92 0.04 230);
+  }
+  /* Dark palette */
+  body[data-palette="dark"] {
+    --paper:   oklch(0.16 0.010 75);
+    --paper-2: oklch(0.22 0.012 75);
+    --ink:    oklch(0.95 0.008 80);
+    --ink-2:  oklch(0.78 0.008 80);
+    --ink-3:  oklch(0.58 0.010 80);
+    --rule:   oklch(0.32 0.012 75);
+    --accent: oklch(0.72 0.16 45);
+    --accent-soft: oklch(0.32 0.08 45);
+  }
+  /* Type alternates */
+  body[data-type="grotesque"] {
+    --font-serif: 'Inter Tight', ui-sans-serif, system-ui, sans-serif;
+  }
+  body[data-type="mono-civic"] {
+    --font-serif: 'Newsreader', Georgia, serif;
+    --font-sans:  'IBM Plex Sans', system-ui, sans-serif;
+  }
+
+  body { background: var(--paper); color: var(--ink); font-family: var(--font-sans); }
+  .font-serif { font-family: var(--font-serif); }
+  .font-mono  { font-family: var(--font-mono); }
+  .font-sans  { font-family: var(--font-sans); }
+  em { font-family: var(--font-serif); font-style: italic; }
+  ::selection { background: var(--accent); color: var(--paper); }
+
+  .filter-sel {
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    color: var(--ink);
+    padding: 6px 10px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%23999' stroke-width='1.2' fill='none'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 26px;
+  }
+  .filter-sel:hover { border-color: var(--ink); }
+  .filter-sel:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* Strikethrough rule across SectionRule for editorial feel */
+  body[data-cardstyle="rules"] section.meeting-card { background: transparent; }
+</style>
+</head>
+<body data-palette="warm" data-type="editorial" data-cardstyle="rules">
+
+<div id="root"></div>
+
+<script type="text/babel" src="data.js"></script>
+<script type="text/babel" src="primitives.jsx"></script>
+<script type="text/babel" src="meeting.jsx"></script>
+<script type="text/babel" src="district-grid.jsx"></script>
+<script type="text/babel" src="masthead.jsx"></script>
+<script type="text/babel" src="screen-home.jsx"></script>
+<script type="text/babel" src="screens-other.jsx"></script>
+<script type="text/babel" src="screens-index.jsx"></script>
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+<script type="text/babel">
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "type": "editorial",
+  "density": "regular",
+  "cardStyle": "rules",
+  "showDistrictGrid": true,
+  "palette": "warm"
+}/*EDITMODE-END*/;
+
+function App() {
+  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [route, setRoute] = React.useState('home');
+  const [askQuery, setAskQuery] = React.useState('');
+  const [meetingsFilters, setMeetingsFilters] = React.useState({});
+
+  React.useEffect(() => {
+    document.body.dataset.palette = t.palette;
+    document.body.dataset.type = t.type;
+    document.body.dataset.cardstyle = t.cardStyle;
+  }, [t.palette, t.type, t.cardStyle]);
+
+  const onAsk = (q) => { setAskQuery(q); setRoute('ask'); window.scrollTo(0, 0); };
+  const onNav = (r, filters) => {
+    setRoute(r);
+    if (r === 'meetings') setMeetingsFilters(filters || {});
+    window.scrollTo(0, 0);
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col" style={{ background: 'var(--paper)' }}>
+      <Masthead route={route} onNav={(r) => { if (r === 'ask') setAskQuery(''); setRoute(r); }} />
+      <div className="flex-1 max-w-[1180px] w-full mx-auto">
+        {route === 'home' && <HomeScreen onAsk={onAsk} onNav={onNav} />}
+        {route === 'ask' && <AskScreen query={askQuery} onAsk={onAsk} onBack={() => setRoute('home')} />}
+        {route === 'topics' && <TopicsScreen onBack={() => setRoute('home')} onNav={onNav} />}
+        {route === 'neighborhoods' && <NeighborhoodsScreen onBack={() => setRoute('home')} onNav={onNav} />}
+        {route === 'meetings' && (
+          <MeetingsScreen initialFilters={meetingsFilters} density={t.density} cardStyle={t.cardStyle} onBack={() => setRoute('home')} />
+        )}
+      </div>
+      <Footer />
+
+      <TweaksPanel>
+        <TweakSection label="Palette" />
+        <TweakRadio label="Color" value={t.palette} options={[{value:'warm',label:'Warm'},{value:'cool',label:'Cool'},{value:'dark',label:'Dark'}]} onChange={(v) => setTweak('palette', v)} />
+        <TweakSection label="Typography" />
+        <TweakRadio label="Pairing" value={t.type} options={[{value:'editorial',label:'Editorial'},{value:'grotesque',label:'Grotesque'},{value:'mono-civic',label:'Mono'}]} onChange={(v) => setTweak('type', v)} />
+        <TweakSection label="Layout" />
+        <TweakRadio label="Density" value={t.density} options={[{value:'compact',label:'Compact'},{value:'regular',label:'Roomy'}]} onChange={(v) => setTweak('density', v)} />
+        <TweakRadio label="Card style" value={t.cardStyle} options={[{value:'rules',label:'Rules'},{value:'filled',label:'Filled'},{value:'floating',label:'Floating'}]} onChange={(v) => setTweak('cardStyle', v)} />
+      </TweaksPanel>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
