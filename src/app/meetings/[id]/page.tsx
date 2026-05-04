@@ -91,6 +91,9 @@ export default async function MeetingPage({
     return ap - bp;
   });
 
+  const today = new Date().toISOString().slice(0, 10);
+  const meetingUpcoming = m.meeting_date >= today;
+
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 px-6 py-12">
       <a
@@ -130,7 +133,7 @@ export default async function MeetingPage({
           </h2>
           <div className="flex flex-col gap-3">
             {items.map((item) => (
-              <ItemCard key={item.id} item={item} />
+              <ItemCard key={item.id} item={item} meetingUpcoming={meetingUpcoming} />
             ))}
           </div>
         </section>

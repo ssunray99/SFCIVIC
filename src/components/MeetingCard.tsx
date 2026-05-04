@@ -38,6 +38,30 @@ export function MeetingCard({
   const today = new Date().toISOString().slice(0, 10);
   const upcoming = meeting.meeting_date >= today;
 
+  if (items.length === 0) {
+    const cancelled = /\bcancell?ed\b/i.test(meeting.title);
+    const placeholder = cancelled
+      ? 'Cancelled'
+      : meeting.needs_ocr
+        ? 'Scanned PDF — OCR pending'
+        : 'Agenda not yet posted';
+    return (
+      <a
+        href={`/meetings/${meeting.id}`}
+        className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-zinc-200 bg-zinc-50/30 px-3 py-2 text-xs hover:bg-zinc-100/60 dark:border-zinc-800 dark:bg-zinc-900/20 dark:hover:bg-zinc-900/60"
+      >
+        <Badge variant="source">{sourceName(meeting.source_id)}</Badge>
+        <time className="text-zinc-500 dark:text-zinc-400">
+          {formatDate(meeting.meeting_date)}
+        </time>
+        <span className="min-w-0 flex-1 truncate text-zinc-700 dark:text-zinc-300">
+          {meeting.title}
+        </span>
+        <span className="text-zinc-400 dark:text-zinc-500">{placeholder}</span>
+      </a>
+    );
+  }
+
   return (
     <section className="flex flex-col gap-4 rounded-lg border border-zinc-200 bg-zinc-50/50 p-5 dark:border-zinc-800 dark:bg-zinc-900/40">
       <header className="flex flex-col gap-2">
@@ -46,9 +70,6 @@ export function MeetingCard({
           <time className="text-zinc-500 dark:text-zinc-400">
             {formatDate(meeting.meeting_date)}
           </time>
-          {meeting.needs_ocr && (
-            <Badge variant="muted">scanned PDF — not summarized</Badge>
-          )}
         </div>
         <h2 className="text-base font-semibold leading-snug">
           <a href={`/meetings/${meeting.id}`} className="hover:underline">
@@ -67,19 +88,11 @@ export function MeetingCard({
         )}
       </header>
 
-      {items.length > 0 ? (
-        <div className="flex flex-col gap-2">
-          {items.map((item) => (
-            <ItemCard key={item.id} item={item} meetingUpcoming={upcoming} />
-          ))}
-        </div>
-      ) : (
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          {meeting.needs_ocr
-            ? 'Scanned PDF — OCR not yet implemented.'
-            : 'No agenda items extracted yet (agenda may not be posted).'}
-        </p>
-      )}
+      <div className="flex flex-col gap-2">
+        {items.map((item) => (
+          <ItemCard key={item.id} item={item} meetingUpcoming={upcoming} />
+        ))}
+      </div>
     </section>
   );
 }
