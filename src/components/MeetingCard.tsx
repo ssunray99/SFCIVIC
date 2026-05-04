@@ -23,8 +23,14 @@ const formatDate = (iso: string) =>
     year: 'numeric',
   });
 
-export function MeetingCard({ meeting }: { meeting: MeetingCardData }) {
-  const items = [...meeting.agenda_items].sort((a, b) => {
+export function MeetingCard({
+  meeting,
+  filterItems,
+}: {
+  meeting: MeetingCardData;
+  filterItems?: (item: ItemCardData) => boolean;
+}) {
+  const items = [...(filterItems ? meeting.agenda_items.filter(filterItems) : meeting.agenda_items)].sort((a, b) => {
     const ap = a.position ?? Number.MAX_SAFE_INTEGER;
     const bp = b.position ?? Number.MAX_SAFE_INTEGER;
     return ap - bp;

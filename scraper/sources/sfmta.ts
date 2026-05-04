@@ -23,8 +23,11 @@ const MAX_TEXT_PER_RESOURCE = 80_000;
 const MAX_TEXT_TOTAL = 100_000;
 
 function isBoardMeetingUrl(href: string): boolean {
-  const lower = href.toLowerCase();
-  return lower.includes('/calendar/') && lower.includes('board') && lower.includes('directors');
+  // Strip query string and fragment before matching — we don't want listing-page
+  // anchor variants (/calendar/sfmta-board-directors-meetings#main) collected.
+  // Require the detail-page slug pattern: /calendar/board-directors-meeting-<date>
+  const path = href.split('?')[0].split('#')[0].toLowerCase();
+  return path.includes('/calendar/board-directors-meeting-');
 }
 
 export async function scrape(): Promise<void> {
@@ -74,10 +77,11 @@ export async function scrape(): Promise<void> {
       }
 
       const meetingDate = await page.evaluate((): string | null => {
-        const time = document.querySelector('time[datetime]');
-        if (time) {
-          const dt = (time as HTMLTimeElement).dateTime;
-          if (dt) return dt.slice(0, 10);
+        // Only accept <time datetime> values that start with a 4-digit year;
+        // time-only values like "07:00" would otherwise compare < SCRAPE_FROM.
+        for (const el of Array.from(document.querySelectorAll('time[datetime]'))) {
+          const dt = (el as HTMLTimeElement).dateTime;
+          if (dt && /^\d{4}-\d{2}-\d{2}/.test(dt)) return dt.slice(0, 10);
         }
         const text = document.body.innerText;
         const m = text.match(
@@ -90,8 +94,19 @@ export async function scrape(): Promise<void> {
         return null;
       });
 
-      if (meetingDate && meetingDate < SCRAPE_FROM) {
-        console.log(`[sfmta] skipping pre-${SCRAPE_FROM} meeting (${meetingDate})`);
+      // Last-resort: parse date from URL slug  e.g. board-directors-meeting-may-5-2026
+      const parsedMeetingDate = meetingDate ?? (() => {
+        const slug = meetingUrl.split('/').pop() ?? '';
+        const m = slug.match(
+          /(january|february|march|april|may|june|july|august|september|october|november|december)-(\d{1,2})-(\d{4})$/i,
+        );
+        if (!m) return null;
+        const d = new Date(`${m[1]} ${m[2]}, ${m[3]}`);
+        return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+      })();
+
+      if (parsedMeetingDate && parsedMeetingDate < SCRAPE_FROM) {
+        console.log(`[sfmta] skipping pre-${SCRAPE_FROM} meeting (${parsedMeetingDate})`);
         continue;
       }
 
@@ -109,7 +124,7 @@ export async function scrape(): Promise<void> {
 
       const eventHtml = await page.content();
       const today = new Date().toISOString().slice(0, 10);
-      const isPast = !!meetingDate && meetingDate < today;
+      const isPast = !!parsedMeetingDate && parsedMeetingDate < today;
 
       let agendaText = '';
 
@@ -138,7 +153,7 @@ export async function scrape(): Promise<void> {
       const sourceUrl = isPast ? meetingUrl : (agendaLink ?? meetingUrl);
       const bytes = Buffer.from(eventHtml);
       const contentHash = sha256(bytes);
-      const date = meetingDate ?? new Date().toISOString().slice(0, 10);
+      const date = parsedMeetingDate ?? new Date().toISOString().slice(0, 10);
       const externalId = meetingUrl.split('/').filter(Boolean).pop() ?? null;
 
       const { data: existing } = await supabase

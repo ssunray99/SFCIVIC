@@ -122,7 +122,7 @@ export default async function TopicPage({
         ) : (
           <div className="flex flex-col gap-4">
             {upcoming.map((m) => (
-              <MeetingCard key={m.id} meeting={m} />
+              <MeetingCard key={m.id} meeting={m} filterItems={(i) => i.topics.includes(topic)} />
             ))}
           </div>
         )}
@@ -138,7 +138,7 @@ export default async function TopicPage({
         ) : (
           <div className="flex flex-col gap-4">
             {past.map((m) => (
-              <MeetingCard key={m.id} meeting={m} />
+              <MeetingCard key={m.id} meeting={m} filterItems={(i) => i.topics.includes(topic)} />
             ))}
           </div>
         )}

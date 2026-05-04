@@ -178,6 +178,89 @@ export type Database = {
           },
         ]
       }
+      legislation: {
+        Row: {
+          created_at: string | null
+          current_body: string | null
+          enriched_at: string | null
+          final_action_date: string | null
+          intro_date: string | null
+          matter_file_number: string
+          matter_type: string | null
+          sponsor: string | null
+          status: string | null
+          title: string | null
+          updated_at: string | null
+          url: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          current_body?: string | null
+          enriched_at?: string | null
+          final_action_date?: string | null
+          intro_date?: string | null
+          matter_file_number: string
+          matter_type?: string | null
+          sponsor?: string | null
+          status?: string | null
+          title?: string | null
+          updated_at?: string | null
+          url?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          current_body?: string | null
+          enriched_at?: string | null
+          final_action_date?: string | null
+          intro_date?: string | null
+          matter_file_number?: string
+          matter_type?: string | null
+          sponsor?: string | null
+          status?: string | null
+          title?: string | null
+          updated_at?: string | null
+          url?: string | null
+        }
+        Relationships: []
+      }
+      legislation_history: {
+        Row: {
+          action: string | null
+          action_date: string | null
+          body: string | null
+          created_at: string | null
+          id: string
+          matter_file_number: string
+          result: string | null
+        }
+        Insert: {
+          action?: string | null
+          action_date?: string | null
+          body?: string | null
+          created_at?: string | null
+          id?: string
+          matter_file_number: string
+          result?: string | null
+        }
+        Update: {
+          action?: string | null
+          action_date?: string | null
+          body?: string | null
+          created_at?: string | null
+          id?: string
+          matter_file_number?: string
+          result?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "legislation_history_matter_file_number_fkey"
+            columns: ["matter_file_number"]
+            isOneToOne: false
+            referencedRelation: "legislation"
+            referencedColumns: ["matter_file_number"]
+          },
+        ]
+      }
       meetings: {
         Row: {
           agenda_url: string | null

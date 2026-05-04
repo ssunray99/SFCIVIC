@@ -165,6 +165,18 @@ export default async function Home({
         </p>
       </header>
 
+      <nav className="flex flex-wrap gap-3 text-sm">
+        <a href="/neighborhoods" className="rounded-md border border-zinc-200 px-3 py-1.5 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800">
+          Browse by neighborhood
+        </a>
+        <a href="/topics" className="rounded-md border border-zinc-200 px-3 py-1.5 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800">
+          Browse by topic
+        </a>
+        <a href="/analytics" className="rounded-md border border-zinc-200 px-3 py-1.5 hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800">
+          Analytics
+        </a>
+      </nav>
+
       <Suspense>
         <AddressSearch />
         <FilterBar />

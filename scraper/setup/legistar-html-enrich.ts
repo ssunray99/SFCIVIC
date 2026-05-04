@@ -76,41 +76,60 @@ async function main() {
       // Navigate back to search page for each matter.
       await page.goto(LEGISLATION_URL, { waitUntil: 'networkidle', timeout: 30_000 });
 
-      // Fill the File # field. Legistar uses ASP.NET Web Forms; we find the
-      // input by its label text rather than fragile auto-generated IDs.
-      const fileInput = page.locator('input[id*="FileNumber"], input[id*="tbFile"]').first();
+      // Set year filter to "All Years" so 2025 and earlier file numbers are found.
+      // lstYears is a Telerik RadComboBox (readonly input) — open via click, then pick.
+      await page.locator('#ctl00_ContentPlaceHolder1_lstYears_Input').click();
+      const allYearsOpt = page.locator('li.rcbItem, .rcbList li').filter({ hasText: /^All Years$/ }).first();
+      if (await allYearsOpt.isVisible({ timeout: 3000 }).catch(() => false)) {
+        await allYearsOpt.click();
+      } else {
+        await page.keyboard.press('Escape');
+      }
+
+      // Uncheck text/attachments/other — search by File # only to avoid false positives
+      // where an omnibus "Petitions and Communications" item references the number.
+      await page.locator('#ctl00_ContentPlaceHolder1_chkText').uncheck();
+      await page.locator('#ctl00_ContentPlaceHolder1_chkAttachments').uncheck();
+      await page.locator('#ctl00_ContentPlaceHolder1_chkOther').uncheck();
+
+      // Fill the search box. Legistar's basic search input has a stable ID.
+      const fileInput = page.locator('#ctl00_ContentPlaceHolder1_txtSearch');
       await fileInput.fill(fileNumber);
 
-      // Submit the search form.
-      const searchBtn = page
-        .locator('input[type="submit"][value*="Search"], a:has-text("Search")')
-        .first();
+      // Submit via the visible search button.
       await Promise.all([
         page.waitForLoadState('networkidle', { timeout: 20_000 }),
-        searchBtn.click(),
+        page.locator('#visibleSearchButton').click(),
       ]);
 
-      // Find the matching result row (first row whose file number matches).
-      const detailUrl = await page.evaluate(
-        (fn: string): string | null => {
-          const rows = Array.from(document.querySelectorAll('tr'));
-          for (const row of rows) {
-            const cells = Array.from(row.querySelectorAll('td'));
-            const fileCell = cells.find(
-              (td) => td.textContent?.trim().replace(/\s+/g, '') === fn,
-            );
-            if (fileCell) {
-              const link = row.querySelector('a[href*="LegislationDetail"]') as HTMLAnchorElement | null;
-              return link?.href ?? null;
-            }
+      // Find the matching result row by checking only the FIRST cell (File # column).
+      // Checking any cell causes false positives when P&C omnibus items reference
+      // the searched number in a non-File# column.
+      const detailUrl = await page.evaluate(`(() => {
+        const fn = ${JSON.stringify(fileNumber)};
+        for (const row of Array.from(document.querySelectorAll('tr'))) {
+          const cells = Array.from(row.querySelectorAll('td'));
+          if (cells.length < 2) continue;
+          const fileCell = (cells[0].textContent || '').trim().replace(/\\s+/g, '');
+          if (fileCell === fn) {
+            const link = row.querySelector('a[href*="LegislationDetail"]');
+            return link ? link.href : null;
           }
-          return null;
-        },
-        fileNumber,
-      );
+        }
+        return null;
+      })()`) as string | null;
 
       if (!detailUrl) {
-        console.warn(`[legistar-enrich] no detail URL found for ${fileNumber}`);
+        // Log the first result row cells to diagnose format mismatches.
+        const firstRowCells = await page.evaluate(`(() => {
+          const rows = Array.from(document.querySelectorAll('tr'));
+          for (const row of rows) {
+            const cells = Array.from(row.querySelectorAll('td')).map(td => (td.textContent||'').trim().slice(0,40));
+            if (cells.length >= 2) return cells.slice(0, 5);
+          }
+          return [];
+        })()`) as string[];
+        console.warn(`[legistar-enrich] no detail URL for ${fileNumber} — first result cells: ${JSON.stringify(firstRowCells)}`);
         failed++;
         await sleep(THROTTLE_MS);
         continue;
@@ -119,8 +138,52 @@ async function main() {
       // Navigate to the matter detail page.
       await page.goto(detailUrl, { waitUntil: 'networkidle', timeout: 30_000 });
 
-      // Extract matter metadata from the detail page.
-      const matter = await page.evaluate((): {
+      // Extract matter metadata. Passed as a string so esbuild never transforms
+      // it and its __name() helper is never injected into the browser context.
+      const matter = await page.evaluate(`(() => {
+        const fieldValue = (labelText) => {
+          const labels = Array.from(document.querySelectorAll('span, td, th, label'));
+          for (const el of labels) {
+            if ((el.textContent || '').trim().toLowerCase().includes(labelText.toLowerCase())) {
+              const next = el.nextElementSibling
+                || (el.closest('tr') ? el.closest('tr').querySelector('td:last-child') : null);
+              return next ? next.textContent.replace(/\\s+/g, ' ').trim() : null;
+            }
+          }
+          return null;
+        };
+
+        const title =
+          (document.querySelector('h1, .title, [class*="title"]') || {}).textContent || null;
+
+        const history = [];
+        for (const table of Array.from(document.querySelectorAll('table'))) {
+          const headers = Array.from(table.querySelectorAll('th'))
+            .map(th => (th.textContent || '').trim().toLowerCase());
+          if (headers.some(h => h.includes('date')) && headers.some(h => h.includes('action'))) {
+            for (const row of Array.from(table.querySelectorAll('tbody tr'))) {
+              const cells = Array.from(row.querySelectorAll('td'))
+                .map(td => (td.textContent || '').replace(/\\s+/g, ' ').trim());
+              if (cells.length >= 2) {
+                history.push({ action_date: cells[0]||'', action: cells[1]||'', body: cells[2]||'', result: cells[3]||'' });
+              }
+            }
+            break;
+          }
+        }
+
+        const t = (v, max) => v ? String(v).replace(/\\s+/g, ' ').trim().slice(0, max) : null;
+        return {
+          title: t(title, 1000),
+          matter_type: t(fieldValue('Type') || fieldValue('Matter Type'), 200),
+          status: t(fieldValue('Status'), 200),
+          current_body: t(fieldValue('Current Controlling Body') || fieldValue('Body'), 200),
+          sponsor: t(fieldValue('Sponsor') || fieldValue('Sponsors'), 500),
+          intro_date: t(fieldValue('Introduced') || fieldValue('Intro Date'), 50),
+          final_action_date: t(fieldValue('Final Action') || fieldValue('Enactment Date'), 50),
+          history,
+        };
+      })()`) as {
         title: string | null;
         matter_type: string | null;
         status: string | null;
@@ -129,67 +192,14 @@ async function main() {
         intro_date: string | null;
         final_action_date: string | null;
         history: Array<{ action_date: string; action: string; body: string; result: string }>;
-      } => {
-        function fieldValue(labelText: string): string | null {
-          const labels = Array.from(document.querySelectorAll('span, td, th, label'));
-          for (const el of labels) {
-            if (el.textContent?.trim().toLowerCase().includes(labelText.toLowerCase())) {
-              const next =
-                el.nextElementSibling ??
-                el.closest('tr')?.querySelector('td:last-child') ??
-                null;
-              return next?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
-            }
-          }
-          return null;
-        }
+      };
 
-        const title =
-          document.querySelector('h1, .title, [class*="title"]')?.textContent?.replace(/\s+/g, ' ').trim() ??
-          null;
-
-        // History table: look for a table with date, action, body columns.
-        const history: Array<{ action_date: string; action: string; body: string; result: string }> = [];
-        const tables = Array.from(document.querySelectorAll('table'));
-        for (const table of tables) {
-          const headers = Array.from(table.querySelectorAll('th')).map((th) =>
-            th.textContent?.trim().toLowerCase() ?? '',
-          );
-          if (headers.some((h) => h.includes('date')) && headers.some((h) => h.includes('action'))) {
-            const rows = Array.from(table.querySelectorAll('tbody tr'));
-            for (const row of rows) {
-              const cells = Array.from(row.querySelectorAll('td')).map(
-                (td) => td.textContent?.replace(/\s+/g, ' ').trim() ?? '',
-              );
-              if (cells.length >= 2) {
-                history.push({
-                  action_date: cells[0] ?? '',
-                  action: cells[1] ?? '',
-                  body: cells[2] ?? '',
-                  result: cells[3] ?? '',
-                });
-              }
-            }
-            break;
-          }
-        }
-
-        return {
-          title,
-          matter_type: fieldValue('Type') ?? fieldValue('Matter Type'),
-          status: fieldValue('Status'),
-          current_body: fieldValue('Current Controlling Body') ?? fieldValue('Body'),
-          sponsor: fieldValue('Sponsor') ?? fieldValue('Sponsors'),
-          intro_date: fieldValue('Introduced') ?? fieldValue('Intro Date'),
-          final_action_date: fieldValue('Final Action') ?? fieldValue('Enactment Date'),
-          history,
-        };
-      });
-
-      // Parse date strings to ISO format (Legistar typically shows M/D/YYYY).
+      // Parse date strings to ISO format. Only accept M/D/YYYY or MM/DD/YYYY
+      // to avoid misinterpreting file numbers or other strings as dates.
       function parseLegistarDate(raw: string | null): string | null {
         if (!raw) return null;
-        const d = new Date(raw);
+        if (!/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(raw.trim())) return null;
+        const d = new Date(raw.trim());
         return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
       }
 

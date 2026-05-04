@@ -40,8 +40,8 @@ function isCitywide(item: MeetingCardData['agenda_items'][number]): boolean {
   return item.district === null && item.neighborhoods.length === 0;
 }
 
-function matchesNeighborhood(m: MeetingCardData, n: Neighborhood): boolean {
-  return m.agenda_items.some((i) => i.neighborhoods.includes(n) || isCitywide(i));
+function matchesNeighborhood(m: MeetingCardData, n: Neighborhood, includeCitywide: boolean): boolean {
+  return m.agenda_items.some((i) => i.neighborhoods.includes(n) || (includeCitywide && isCitywide(i)));
 }
 
 export function generateStaticParams() {
@@ -60,12 +60,16 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 
 export default async function NeighborhoodPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const { slug } = await params;
+  const [{ slug }, sp] = await Promise.all([params, searchParams]);
   const neighborhood = fromSlug(slug);
   if (!neighborhood) notFound();
+
+  const includeCitywide = sp['citywide'] === 'show';
 
   const supabase = createServerClient();
   const today = new Date().toISOString().slice(0, 10);
@@ -86,10 +90,10 @@ export default async function NeighborhoodPage({
   ]);
 
   const upcoming = ((upcomingRes.data ?? []) as MeetingCardData[]).filter((m) =>
-    matchesNeighborhood(m, neighborhood),
+    matchesNeighborhood(m, neighborhood, includeCitywide),
   );
   const past = ((pastRes.data ?? []) as MeetingCardData[]).filter((m) =>
-    matchesNeighborhood(m, neighborhood),
+    matchesNeighborhood(m, neighborhood, includeCitywide),
   );
 
   return (
@@ -103,6 +107,21 @@ export default async function NeighborhoodPage({
         <p className="text-zinc-600 dark:text-zinc-400">
           Civic meetings with agenda items affecting {neighborhood}.
         </p>
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-zinc-500">Show:</span>
+          <a
+            href={`/neighborhoods/${slug}`}
+            className={`rounded-md px-3 py-1 ${!includeCitywide ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800'}`}
+          >
+            {neighborhood}-specific only
+          </a>
+          <a
+            href={`/neighborhoods/${slug}?citywide=show`}
+            className={`rounded-md px-3 py-1 ${includeCitywide ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800'}`}
+          >
+            All items (incl. citywide)
+          </a>
+        </div>
         <a
           href={`/?neighborhood=${encodeURIComponent(neighborhood)}`}
           className="w-fit text-sm text-zinc-500 underline"
@@ -121,7 +140,7 @@ export default async function NeighborhoodPage({
         ) : (
           <div className="flex flex-col gap-4">
             {upcoming.map((m) => (
-              <MeetingCard key={m.id} meeting={m} />
+              <MeetingCard key={m.id} meeting={m} filterItems={(i) => i.neighborhoods.includes(neighborhood) || (includeCitywide && isCitywide(i))} />
             ))}
           </div>
         )}
@@ -137,7 +156,7 @@ export default async function NeighborhoodPage({
         ) : (
           <div className="flex flex-col gap-4">
             {past.map((m) => (
-              <MeetingCard key={m.id} meeting={m} />
+              <MeetingCard key={m.id} meeting={m} filterItems={(i) => i.neighborhoods.includes(neighborhood) || (includeCitywide && isCitywide(i))} />
             ))}
           </div>
         )}
