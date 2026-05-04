@@ -35,7 +35,7 @@ export function ActionCallout({
 
   return (
     <div
-      className="mt-3 px-4 py-3 border rounded-[6px] text-[14.5px] leading-relaxed"
+      className="mt-3 px-3.5 py-2.5 border rounded-[6px] text-[13.5px] leading-relaxed"
       style={calloutStyle}
     >
       <div className="font-semibold">{headline}</div>

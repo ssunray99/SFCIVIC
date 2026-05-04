@@ -65,17 +65,17 @@ export function MeetingCard({
     return (
       <a
         href={`/meetings/${meeting.id}`}
-        className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[6px] border border-[var(--rule)] bg-[var(--paper)] px-4 py-2.5 text-[13px] hover:bg-[var(--paper-2)] transition-colors"
+        className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-[6px] border border-[var(--rule)] bg-[var(--paper)] px-3.5 py-2 text-[12.5px] hover:bg-[var(--paper-2)] transition-colors"
       >
         <SourcePill sourceId={meeting.source_id} />
         <time className="text-[var(--ink-2)]">{fmtDate(meeting.meeting_date)}</time>
         {rel && (
-          <span className="font-mono uppercase text-[11px] tracking-[0.16em] text-[var(--accent)]">
+          <span className="font-mono uppercase text-[10.5px] tracking-[0.16em] text-[var(--accent)]">
             {rel}
           </span>
         )}
         <span className="min-w-0 flex-1 truncate text-[var(--ink)]">{meeting.title}</span>
-        <span className="font-mono uppercase text-[11px] tracking-[0.14em] text-[var(--ink-3)]">
+        <span className="font-mono uppercase text-[10.5px] tracking-[0.14em] text-[var(--ink-3)]">
           {placeholder}
         </span>
       </a>
@@ -84,19 +84,19 @@ export function MeetingCard({
 
   return (
     <section className="flex flex-col rounded-[8px] border border-[var(--rule)] bg-[var(--paper)]">
-      <header className="px-6 pt-5 pb-3 flex flex-col gap-2.5">
-        <div className="flex flex-wrap items-center gap-2.5 text-[13px] text-[var(--ink-2)]">
+      <header className="px-5 pt-4 pb-3 flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-[var(--ink-2)]">
           <SourcePill sourceId={meeting.source_id} />
           <time>{fmtDate(meeting.meeting_date)}</time>
           {rel && (
-            <span className="font-mono uppercase text-[11px] tracking-[0.16em] text-[var(--accent)]">
+            <span className="font-mono uppercase text-[10.5px] tracking-[0.16em] text-[var(--accent)]">
               {rel}
             </span>
           )}
         </div>
         <h2
           className="font-serif font-medium leading-tight text-[var(--ink)]"
-          style={{ fontSize: 24 }}
+          style={{ fontSize: 22 }}
         >
           <a href={`/meetings/${meeting.id}`} className="hover:underline">
             {meeting.title}
@@ -107,14 +107,14 @@ export function MeetingCard({
             href={meeting.agenda_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[13px] text-[var(--accent)] hover:underline w-fit"
+            className="text-[12.5px] text-[var(--accent)] hover:underline w-fit"
           >
             Original agenda ↗
           </a>
         )}
       </header>
 
-      <div className="px-6 pb-6 flex flex-col gap-3.5">
+      <div className="px-5 pb-5 flex flex-col gap-3">
         {items.map((item) => (
           <ItemSubCard
             key={item.id}

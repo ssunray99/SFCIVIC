@@ -19,7 +19,7 @@ export function Eyebrow({
 }) {
   return (
     <span
-      className={`font-mono uppercase text-[11px] tracking-[0.18em] text-[var(--ink-3)] ${className}`}
+      className={`font-mono uppercase text-[10.5px] tracking-[0.18em] text-[var(--ink-3)] ${className}`}
     >
       {children}
     </span>
@@ -43,13 +43,13 @@ export function SectionRule({
     <div className="flex items-end justify-between border-b border-[var(--ink)] pb-2 mb-4">
       <h2
         className="font-serif font-medium tracking-tight text-[var(--ink)]"
-        style={{ fontSize: 32, lineHeight: 1 }}
+        style={{ fontSize: 28, lineHeight: 1 }}
       >
         {label}
       </h2>
       <div className="flex items-baseline gap-3">
         {count !== undefined && (
-          <span className="font-mono text-[12px] text-[var(--accent)] tabular-nums">
+          <span className="font-mono text-[11px] text-[var(--accent)] tabular-nums">
             {count}
           </span>
         )}
@@ -72,7 +72,7 @@ type PillProps = {
 };
 
 export function Pill({ children, active, accent, href, className = '' }: PillProps) {
-  const base = 'inline-flex items-center rounded-full border px-4 py-2 text-[14.5px] transition-colors';
+  const base = 'inline-flex items-center rounded-full border px-3.5 py-1.5 text-[13.5px] transition-colors';
   const variant = active
     ? 'bg-[var(--ink)] text-[var(--paper)] border-[var(--ink)]'
     : accent
@@ -95,7 +95,7 @@ export function Pill({ children, active, accent, href, className = '' }: PillPro
 /* -------------------------------------------------------------------------- */
 
 const chipBase =
-  'inline-flex items-center px-3 py-1 rounded-full text-[12.5px] whitespace-nowrap';
+  'inline-flex items-center px-2.5 py-0.5 rounded-full text-[12px] whitespace-nowrap';
 
 export function TopicTag({ topic }: { topic: string }) {
   // green
@@ -160,7 +160,7 @@ const sourceName = (id: string) => SOURCES.find((s) => s.id === id)?.name ?? id;
 
 export function SourcePill({ sourceId }: { sourceId: string }) {
   return (
-    <span className="inline-flex items-center px-3.5 py-1 text-[13px] font-medium rounded-full bg-[var(--ink)] text-[var(--paper)]">
+    <span className="inline-flex items-center px-3 py-1 text-[12.5px] font-medium rounded-full bg-[var(--ink)] text-[var(--paper)]">
       {sourceName(sourceId)}
     </span>
   );
@@ -173,7 +173,7 @@ export function SourcePill({ sourceId }: { sourceId: string }) {
 export function TypeBadge({ type }: { type: string | null | undefined }) {
   if (!type) return null;
   return (
-    <span className="inline-flex items-center px-3.5 py-1 text-[13px] rounded-full border border-[var(--rule)] bg-[var(--paper)] text-[var(--ink-2)] capitalize whitespace-nowrap">
+    <span className="inline-flex items-center px-3 py-1 text-[12.5px] rounded-full border border-[var(--rule)] bg-[var(--paper)] text-[var(--ink-2)] capitalize whitespace-nowrap">
       {type}
     </span>
   );
