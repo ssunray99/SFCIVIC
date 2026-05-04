@@ -170,15 +170,17 @@ async function main() {
         const title = rawTitleText.split('DetailsReports')[0].trim() || null;
 
         // The real legislative history table uniquely has a "Ver." column header.
-        // The metadata/details grid also has "date" and "action" headers but never
-        // has "ver", so checking for "ver" distinguishes the two tables.
+        // The real legislative history table has both a "Ver." column and a "Date"
+        // column. Multi-version matters also have a Versions summary table that has
+        // "Ver." but NO "Date" — requiring both prevents that table from matching
+        // first and being parsed with the wrong column mapping.
         const history = [];
         for (const table of Array.from(document.querySelectorAll('table'))) {
           const ths = Array.from(table.querySelectorAll('th'));
           const headers = ths.map(th => (th.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase());
           const hasVer = headers.some(h => h === 'ver.' || h === 'ver' || h.startsWith('ver'));
-          const hasActionBy = headers.some(h => h.includes('action by'));
-          if (!hasVer && !hasActionBy) continue;
+          const hasDate = headers.some(h => h === 'date' || h === 'action date');
+          if (!hasVer || !hasDate) continue;
 
           // Map column indices dynamically so order changes don't break us.
           let dateIdx = 0, actionIdx = -1, bodyIdx = -1, resultIdx = -1;
@@ -257,17 +259,19 @@ async function main() {
         console.error(`[legistar-enrich] upsert error for ${fileNumber}:`, upsertErr.message);
         failed++;
       } else {
-        // Insert history rows.
+        // Insert history rows. Filter AFTER date parsing so rows whose
+        // "date" cell contains a label string (e.g. "Name:", "Status:") are
+        // excluded — those are metadata rows embedded in the history table tbody.
         if (matter.history.length > 0) {
           const historyRows = matter.history
-            .filter((h) => h.action_date)
             .map((h) => ({
               matter_file_number: fileNumber,
               action_date: parseLegistarDate(h.action_date),
               action: h.action || null,
               body: h.body || null,
               result: h.result || null,
-            }));
+            }))
+            .filter((h) => h.action_date !== null);
 
           if (historyRows.length > 0) {
             // Delete existing history then re-insert so it stays fresh.
