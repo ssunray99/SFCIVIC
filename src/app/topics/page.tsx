@@ -43,10 +43,6 @@ export default function TopicsIndex() {
         Also browse{' '}
         <a href="/neighborhoods" className="underline">
           by neighborhood
-        </a>{' '}
-        or{' '}
-        <a href="/analytics" className="underline">
-          view analytics
         </a>
         .
       </footer>

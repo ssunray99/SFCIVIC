@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
 type LocateResult = {
@@ -20,7 +20,6 @@ const buttonClass =
 
 export function AddressSearch() {
   const router = useRouter();
-  const params = useSearchParams();
   const [value, setValue] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,18 +44,15 @@ export function AddressSearch() {
       }
       const { neighborhood, district } = (await resp.json()) as LocateResult;
 
-      const next = new URLSearchParams(params.toString());
-
       if (!neighborhood && district == null) {
         setError('Address found but outside SF neighborhood/district boundaries');
         return;
       }
+      const next = new URLSearchParams();
       if (neighborhood) next.set('neighborhood', neighborhood);
-      else next.delete('neighborhood');
       if (district != null) next.set('district', String(district));
-      else next.delete('district');
 
-      router.replace(`/?${next.toString()}`);
+      router.push(`/meetings?${next.toString()}`);
     } catch {
       setError('Geocoding failed — try again');
     } finally {
