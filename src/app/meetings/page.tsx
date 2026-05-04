@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { createServerClient } from '@/lib/supabase/server';
 import { MeetingCard, type MeetingCardData } from '@/components/MeetingCard';
 import { FilterBar } from '@/components/FilterBar';
+import { Eyebrow, Pill, SectionRule } from '@/components/primitives';
 import {
   NEIGHBORHOODS,
   TOPICS,
@@ -25,6 +26,8 @@ const SELECT = `
   source_id,
   title,
   meeting_date,
+  meeting_time,
+  location,
   agenda_url,
   needs_ocr,
   agenda_items (
@@ -49,7 +52,6 @@ type Filters = {
   topic: Topic | undefined;
   district: District | undefined;
   source: SourceId | undefined;
-  q: string | undefined;
   from: string | undefined;
   to: string | undefined;
   view: 'upcoming' | 'past' | 'all';
@@ -82,7 +84,6 @@ function parseFilters(raw: Record<string, string | string[] | undefined>): Filte
     topic: (TOPICS as readonly string[]).includes(topic ?? '') ? (topic as Topic) : undefined,
     district: DISTRICTS.includes(districtNum as District) ? (districtNum as District) : undefined,
     source: SOURCES.some((s) => s.id === source) ? (source as SourceId) : undefined,
-    q: str('q')?.trim() || undefined,
     from: from && ISO_DATE.test(from) ? from : undefined,
     to: to && ISO_DATE.test(to) ? to : undefined,
     view,
@@ -126,7 +127,6 @@ const hasFilters = (f: Filters) =>
   f.topic !== undefined ||
   f.district !== undefined ||
   f.source !== undefined ||
-  f.q !== undefined ||
   f.from !== undefined ||
   f.to !== undefined;
 
@@ -138,24 +138,11 @@ async function getMeetings(filters: Filters): Promise<{
   const today = new Date().toISOString().slice(0, 10);
   const filtered = hasFilters(filters);
 
-  let searchIds: string[] | null = null;
-  if (filters.q) {
-    const { data: hits, error: ftsErr } = await supabase
-      .from('agenda_items')
-      .select('meeting_id')
-      .textSearch('search_tsv', filters.q, { type: 'websearch', config: 'english' });
-    if (ftsErr) console.error('[meetings] FTS query failed:', ftsErr.message);
-    const ids = [...new Set((hits ?? []).map((h) => h.meeting_id as string))];
-    if (ids.length === 0) return { upcoming: [], past: [] };
-    searchIds = ids;
-  }
-
   const base = () => {
     let q = supabase.from('meetings').select(SELECT);
     if (filters.source) q = q.eq('source_id', filters.source);
     if (filters.from) q = q.gte('meeting_date', filters.from);
     if (filters.to) q = q.lte('meeting_date', filters.to);
-    if (searchIds) q = q.in('id', searchIds);
     return q;
   };
 
@@ -190,16 +177,14 @@ async function getMeetings(filters: Filters): Promise<{
 function ViewToggle({ current }: { current: Filters['view'] }) {
   const tab = (key: Filters['view'], label: string) => {
     const active = current === key;
+    const href = `/meetings${key === 'upcoming' ? '' : `?view=${key}`}`;
+    const cls = `rounded-[6px] px-4 py-1.5 text-[13.5px] font-medium border transition-colors ${
+      active
+        ? 'bg-[var(--ink)] text-[var(--paper)] border-[var(--ink)]'
+        : 'bg-[var(--paper)] text-[var(--ink-2)] border-[var(--rule)] hover:bg-[var(--paper-2)]'
+    }`;
     return (
-      <a
-        key={key}
-        href={`/meetings${key === 'upcoming' ? '' : `?view=${key}`}`}
-        className={
-          active
-            ? 'rounded-md bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white dark:bg-zinc-100 dark:text-zinc-900'
-            : 'rounded-md border border-zinc-300 px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800'
-        }
-      >
+      <a key={key} href={href} className={cls}>
         {label}
       </a>
     );
@@ -234,21 +219,15 @@ function CitywideToggle({
     const qs = next.toString();
     return qs ? `/meetings?${qs}` : '/meetings';
   };
-  const btn = (on: boolean, text: string) =>
-    `rounded-md px-3 py-1 text-xs ${
-      active === on
-        ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
-        : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800'
-    }`;
   return (
-    <div className="flex flex-wrap items-center gap-2 text-sm">
-      <span className="text-zinc-500">Show:</span>
-      <a href={buildHref(false)} className={btn(false, '')}>
+    <div className="flex flex-wrap items-center gap-2.5">
+      <Eyebrow>Show</Eyebrow>
+      <Pill href={buildHref(false)} active={!active}>
         {label} only
-      </a>
-      <a href={buildHref(true)} className={btn(true, '')}>
+      </Pill>
+      <Pill href={buildHref(true)} active={active}>
         Also include citywide
-      </a>
+      </Pill>
     </div>
   );
 }
@@ -273,26 +252,46 @@ export default async function MeetingsPage({
     return parts.length > 0 ? parts.join(' / ') : null;
   })();
 
-  // When filtering by place, only render items relevant to that place inside
-  // each meeting card (matching /neighborhoods/[slug] behavior). Topic filter
-  // alone doesn't trigger this — topic-filtered meetings still show full
-  // agendas because surrounding context is useful.
-  const itemFilter =
-    filters.neighborhood !== undefined || filters.district !== undefined
-      ? (i: MeetingCardData['agenda_items'][number]) => {
-          if (filters.neighborhood && i.neighborhoods.includes(filters.neighborhood)) return true;
-          if (filters.district !== undefined && i.district === filters.district) return true;
-          if (filters.citywide && isCitywide(i)) return true;
-          return false;
+  // When filtering, render only items relevant to the active filter inside
+  // each meeting card. Topic, neighborhood, and district all narrow the
+  // visible items so the page reflects what was asked for. When multiple
+  // filters are set, an item must match every active filter (AND).
+  const hasItemNarrowing =
+    filters.topic !== undefined ||
+    filters.neighborhood !== undefined ||
+    filters.district !== undefined;
+  const itemFilter = hasItemNarrowing
+    ? (i: MeetingCardData['agenda_items'][number]) => {
+        if (filters.topic && !i.topics.includes(filters.topic)) return false;
+        if (filters.neighborhood !== undefined || filters.district !== undefined) {
+          const placeMatch =
+            (filters.neighborhood && i.neighborhoods.includes(filters.neighborhood)) ||
+            (filters.district !== undefined && i.district === filters.district) ||
+            (filters.citywide && isCitywide(i));
+          if (!placeMatch) return false;
         }
-      : undefined;
+        return true;
+      }
+    : undefined;
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 px-6 py-12">
-      <header className="flex flex-col gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Meetings</h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Browse San Francisco civic meetings by date, source, neighborhood, district, or topic.
+    <main className="mx-auto max-w-7xl px-10 py-10 flex flex-col gap-7">
+      <header className="flex flex-col gap-4">
+        <Link
+          href="/"
+          className="font-mono uppercase text-[11px] tracking-[0.16em] text-[var(--ink-3)] hover:text-[var(--ink-2)] w-fit"
+        >
+          ← Back
+        </Link>
+        <h1
+          className="font-serif tracking-tight text-[var(--ink)]"
+          style={{ fontSize: 48, lineHeight: 1, fontWeight: 500 }}
+        >
+          Meetings
+        </h1>
+        <p className="text-[15.5px] leading-relaxed text-[var(--ink-2)] max-w-2xl">
+          Browse San Francisco civic meetings by date, source, neighborhood,
+          district, or topic.
         </p>
         <ViewToggle current={filters.view} />
       </header>
@@ -306,11 +305,11 @@ export default async function MeetingsPage({
       )}
 
       {total === 0 ? (
-        <p className="rounded-md border border-dashed border-zinc-300 px-4 py-6 text-sm text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+        <p className="rounded-[6px] border border-dashed border-[var(--rule)] px-4 py-6 text-[14.5px] text-[var(--ink-2)]">
           {isFiltered ? (
             <>
               No meetings match the current filters.{' '}
-              <Link href="/meetings" className="underline">
+              <Link href="/meetings" className="underline hover:text-[var(--ink)]">
                 Clear filters
               </Link>
               .
@@ -322,15 +321,12 @@ export default async function MeetingsPage({
       ) : (
         <>
           {(filters.view === 'upcoming' || filters.view === 'all') && (
-            <section className="flex flex-col gap-4">
-              <div className="flex items-baseline justify-between">
-                <h2 className="text-lg font-medium">Upcoming</h2>
-                <span className="text-xs text-zinc-500">{upcoming.length}</span>
-              </div>
+            <section className="flex flex-col gap-5">
+              <SectionRule label="Upcoming" count={upcoming.length} />
               {upcoming.length === 0 ? (
-                <p className="text-sm text-zinc-500">No upcoming meetings match.</p>
+                <p className="text-[14.5px] text-[var(--ink-3)]">No upcoming meetings match.</p>
               ) : (
-                <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-5">
                   {upcoming.map((m) => (
                     <MeetingCard key={m.id} meeting={m} filterItems={itemFilter} />
                   ))}
@@ -340,15 +336,12 @@ export default async function MeetingsPage({
           )}
 
           {(filters.view === 'past' || filters.view === 'all') && (
-            <section className="flex flex-col gap-4">
-              <div className="flex items-baseline justify-between">
-                <h2 className="text-lg font-medium">Past</h2>
-                <span className="text-xs text-zinc-500">{past.length}</span>
-              </div>
+            <section className="flex flex-col gap-5">
+              <SectionRule label="Past" count={past.length} />
               {past.length === 0 ? (
-                <p className="text-sm text-zinc-500">No past meetings match.</p>
+                <p className="text-[14.5px] text-[var(--ink-3)]">No past meetings match.</p>
               ) : (
-                <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-5">
                   {past.map((m) => (
                     <MeetingCard key={m.id} meeting={m} filterItems={itemFilter} />
                   ))}

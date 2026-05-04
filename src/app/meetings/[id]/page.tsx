@@ -1,8 +1,13 @@
+// Single meeting detail page — full agenda for one meeting in the editorial
+// style. Reuses the same primitives, ItemSubCard, and ActionCallout-on-one
+// rule as the MeetingCard list view.
+
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { createServerClient } from '@/lib/supabase/server';
-import { ItemCard, type ItemCardData } from '@/components/ItemCard';
-import { Badge } from '@/components/Badge';
-import { SOURCES } from '@/lib/constants';
+import { ItemSubCard, type ItemSubCardData } from '@/components/ItemSubCard';
+import { SourcePill } from '@/components/primitives';
+import { fmtDateLong, relativeDay } from '@/lib/format';
 
 export const revalidate = 300;
 
@@ -11,6 +16,8 @@ const SELECT = `
   source_id,
   title,
   meeting_date,
+  meeting_time,
+  location,
   agenda_url,
   needs_ocr,
   agenda_items (
@@ -35,20 +42,25 @@ type MeetingDetail = {
   source_id: string;
   title: string;
   meeting_date: string;
+  meeting_time: string | null;
+  location: string | null;
   agenda_url: string | null;
   needs_ocr: boolean;
-  agenda_items: ItemCardData[];
+  agenda_items: ItemSubCardData[];
 };
 
-const sourceName = (id: string) => SOURCES.find((s) => s.id === id)?.name ?? id;
+const hasActionFields = (i: ItemSubCardData) =>
+  i.comment_deadline != null ||
+  i.comment_email != null ||
+  i.comment_portal_url != null ||
+  i.in_person_slot != null;
 
-const formatDate = (iso: string) =>
-  new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
+function pickActionItemId(items: ItemSubCardData[], upcoming: boolean): string | null {
+  const flagged = items.find(hasActionFields);
+  if (flagged) return flagged.id;
+  if (upcoming && items.length >= 2) return items[1].id;
+  return null;
+}
 
 export async function generateMetadata({
   params,
@@ -92,34 +104,50 @@ export default async function MeetingPage({
   });
 
   const today = new Date().toISOString().slice(0, 10);
-  const meetingUpcoming = m.meeting_date >= today;
+  const upcoming = m.meeting_date >= today;
+  const rel = relativeDay(m.meeting_date);
+  const actionItemId = pickActionItemId(items, upcoming);
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 px-6 py-12">
-      <a
-        href="/"
-        className="text-sm text-zinc-500 hover:underline dark:text-zinc-400"
+    <main className="mx-auto max-w-7xl px-10 py-10 flex flex-col gap-7">
+      <Link
+        href="/meetings"
+        className="font-mono uppercase text-[11px] tracking-[0.16em] text-[var(--ink-3)] hover:text-[var(--ink-2)] w-fit"
       >
         ← All meetings
-      </a>
+      </Link>
 
       <header className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <Badge variant="source">{sourceName(m.source_id)}</Badge>
-          <time className="text-zinc-500 dark:text-zinc-400">
-            {formatDate(m.meeting_date)}
-          </time>
+        <div className="flex flex-wrap items-center gap-2.5 text-[13px] text-[var(--ink-2)]">
+          <SourcePill sourceId={m.source_id} />
+          <time>{fmtDateLong(m.meeting_date)}</time>
+          {rel && (
+            <span className="font-mono uppercase text-[11px] tracking-[0.16em] text-[var(--accent)]">
+              {rel}
+            </span>
+          )}
           {m.needs_ocr && (
-            <Badge variant="muted">scanned PDF — not summarized</Badge>
+            <span className="font-mono uppercase text-[11px] tracking-[0.14em] text-[var(--ink-3)]">
+              scanned PDF — not summarized
+            </span>
           )}
         </div>
-        <h1 className="text-2xl font-semibold leading-snug">{m.title}</h1>
+        <h1
+          className="font-serif tracking-tight text-[var(--ink)] leading-tight"
+          style={{ fontSize: 38, fontWeight: 500 }}
+        >
+          {m.title}
+        </h1>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-[var(--ink-2)]">
+          {m.meeting_time && <span>{m.meeting_time}</span>}
+          {m.location && <span>{m.location}</span>}
+        </div>
         {m.agenda_url && (
           <a
             href={m.agenda_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs text-sky-700 hover:underline dark:text-sky-400"
+            className="text-[13px] text-[var(--accent)] hover:underline w-fit"
           >
             Original agenda ↗
           </a>
@@ -127,28 +155,35 @@ export default async function MeetingPage({
       </header>
 
       {items.length > 0 ? (
-        <section className="flex flex-col gap-3">
-          <h2 className="text-sm font-medium text-zinc-500 dark:text-zinc-400">
-            {items.length} agenda item{items.length !== 1 ? 's' : ''}
-          </h2>
-          <div className="flex flex-col gap-3">
+        <section className="flex flex-col gap-4">
+          <div className="flex items-baseline justify-between border-b border-[var(--rule)] pb-2">
+            <span className="font-mono uppercase text-[11px] tracking-[0.18em] text-[var(--ink-3)]">
+              Agenda items
+            </span>
+            <span className="font-mono text-[12px] tabular-nums text-[var(--accent)]">
+              {items.length}
+            </span>
+          </div>
+          <div className="flex flex-col gap-3.5">
             {items.map((item) => (
-              <ItemCard key={item.id} item={item} meetingUpcoming={meetingUpcoming} />
+              <ItemSubCard
+                key={item.id}
+                item={item}
+                showAction={item.id === actionItemId}
+                meetingDate={m.meeting_date}
+                meetingTime={m.meeting_time}
+                meetingLocation={m.location}
+              />
             ))}
           </div>
         </section>
       ) : (
-        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+        <p className="rounded-[6px] border border-dashed border-[var(--rule)] px-4 py-6 text-[14.5px] text-[var(--ink-2)]">
           {m.needs_ocr
             ? 'This agenda was a scanned PDF — text extraction is not yet implemented.'
             : 'No agenda items have been extracted yet. The agenda may not be posted.'}
         </p>
       )}
-
-      <footer className="border-t border-zinc-200 pt-6 text-xs text-zinc-500 dark:border-zinc-800">
-        Unofficial. Summaries are AI-generated and may contain errors.{' '}
-        <a href="/about" className="underline">Learn more</a>
-      </footer>
     </main>
   );
 }

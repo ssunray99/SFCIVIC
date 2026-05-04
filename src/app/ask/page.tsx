@@ -1,21 +1,35 @@
-// LLM-powered conversational search.
+// LLM-powered conversational search. Reads ?q= from the URL, runs the shared
+// parser to extract structured filters, queries Supabase for the most relevant
+// agenda items, then asks Haiku 4.5 to write a 2–4 sentence narrative answer
+// with [N] citations linking back to the items rendered below.
 //
-// Reads ?q= from the URL, runs the shared parser to extract structured filters,
-// queries Supabase for the most relevant agenda items, then asks Haiku 4.5 to
-// write a 2–4 sentence narrative answer with [N] citations linking back to the
-// items rendered below.
-//
-// Server component, no client data-fetching. Errors surface inline.
+// Server component. Two states: empty (no ?q=) shows hero + try-asking
+// examples; result state shows query as heading + answer card + matching items.
 
 import Link from 'next/link';
 import { createServerClient } from '@/lib/supabase/server';
 import { parseQuery, ParseError, type ParsedQuery } from '@/lib/search/parse-query';
 import { synthesizeAnswer, type ItemContext } from '@/lib/search/synthesize';
-import { Badge } from '@/components/Badge';
 import { AskInput } from '@/components/AskInput';
+import {
+  DistrictChip,
+  Eyebrow,
+  NeighborhoodChip,
+  SectionRule,
+  SourcePill,
+  TopicTag,
+} from '@/components/primitives';
 import { SOURCES } from '@/lib/constants';
+import { fmtDate } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
+
+const EXAMPLES = [
+  "what's happening with housing in the Mission?",
+  'budget items this month',
+  'transit projects in District 6',
+  'anything from the Planning Commission about Treasure Island?',
+] as const;
 
 type ItemRow = {
   id: string;
@@ -36,13 +50,6 @@ type ItemRow = {
 
 const sourceName = (id: string) => SOURCES.find((s) => s.id === id)?.name ?? id;
 
-const formatDate = (iso: string) =>
-  new Date(`${iso}T12:00:00Z`).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-
 async function findRelevantItems(filters: ParsedQuery): Promise<ItemRow[]> {
   const supabase = createServerClient();
 
@@ -62,7 +69,8 @@ async function findRelevantItems(filters: ParsedQuery): Promise<ItemRow[]> {
   if (filters.dateFrom) query = query.gte('meetings.meeting_date', filters.dateFrom);
   if (filters.dateTo) query = query.lte('meetings.meeting_date', filters.dateTo);
   if (filters.topics.length > 0) query = query.overlaps('topics', filters.topics);
-  if (filters.neighborhoods.length > 0) query = query.overlaps('neighborhoods', filters.neighborhoods);
+  if (filters.neighborhoods.length > 0)
+    query = query.overlaps('neighborhoods', filters.neighborhoods);
   if (filters.district != null) query = query.eq('district', filters.district);
   if (filters.keywords) {
     query = query.textSearch('search_tsv', filters.keywords, {
@@ -96,51 +104,93 @@ function toItemContext(rows: ItemRow[]): ItemContext[] {
   }));
 }
 
+// Renders a synthesized answer, linking citation markers back to the matching
+// item rows. Handles single citations `[3]` and combined ones `[1, 3, 5]` —
+// inside a combined block each number becomes its own link, with the brackets
+// and separators rendered as plain text.
 function renderAnswerWithCitations(text: string, itemCount: number) {
-  const parts = text.split(/(\[\d+\])/g);
+  const linkClass =
+    'font-mono text-[12px] text-[var(--accent)] hover:underline align-baseline';
+
+  const renderNumber = (n: number, key: string) => {
+    if (n >= 1 && n <= itemCount) {
+      return (
+        <a key={key} href={`#item-${n}`} className={linkClass}>
+          {n}
+        </a>
+      );
+    }
+    return <span key={key}>{n}</span>;
+  };
+
+  const parts = text.split(/(\[[\d,\s-]+\])/g);
   return parts.map((part, i) => {
-    const m = part.match(/^\[(\d+)\]$/);
-    if (m) {
-      const n = Number(m[1]);
+    const inner = part.match(/^\[([\d,\s-]+)\]$/);
+    if (!inner) return <span key={i}>{part}</span>;
+
+    // Single-number citation: keep brackets attached to the link for the
+    // familiar `[3]` look.
+    const single = inner[1].match(/^\s*(\d+)\s*$/);
+    if (single) {
+      const n = Number(single[1]);
       if (n >= 1 && n <= itemCount) {
         return (
-          <a
-            key={i}
-            href={`#item-${n}`}
-            className="font-medium text-sky-700 underline-offset-2 hover:underline dark:text-sky-400"
-          >
+          <a key={i} href={`#item-${n}`} className={linkClass}>
             [{n}]
           </a>
         );
       }
+      return <span key={i}>{part}</span>;
     }
-    return <span key={i}>{part}</span>;
+
+    // Combined citation: split inner on digits and link each number.
+    const tokens = inner[1].split(/(\d+)/);
+    return (
+      <span key={i}>
+        [
+        {tokens.map((tok, j) => {
+          if (/^\d+$/.test(tok)) return renderNumber(Number(tok), `${i}-${j}`);
+          return <span key={`${i}-${j}`}>{tok}</span>;
+        })}
+        ]
+      </span>
+    );
   });
 }
 
-function FiltersChips({ filters }: { filters: ParsedQuery }) {
-  const chips: { label: string; key: string }[] = [];
-  for (const t of filters.topics) chips.push({ key: `t-${t}`, label: t });
-  for (const n of filters.neighborhoods) chips.push({ key: `n-${n}`, label: n });
-  if (filters.district != null) chips.push({ key: 'd', label: `District ${filters.district}` });
-  if (filters.source) chips.push({ key: 's', label: sourceName(filters.source) });
-  if (filters.dateFrom || filters.dateTo) {
-    chips.push({
-      key: 'date',
-      label: `${filters.dateFrom ?? '…'} → ${filters.dateTo ?? '…'}`,
-    });
-  }
-  if (filters.keywords) chips.push({ key: 'kw', label: `"${filters.keywords}"` });
-  if (chips.length === 0) return null;
+function EmptyState() {
   return (
-    <div className="flex flex-wrap gap-1.5">
-      <span className="text-xs text-zinc-500 dark:text-zinc-400">Interpreted as:</span>
-      {chips.map((c) => (
-        <Badge key={c.key} variant="muted">
-          {c.label}
-        </Badge>
-      ))}
-    </div>
+    <main className="mx-auto max-w-7xl px-10 py-12 flex flex-col gap-8">
+      <div className="flex flex-col gap-3">
+        <h1
+          className="font-serif tracking-tight text-[var(--ink)]"
+          style={{ fontSize: 44, lineHeight: 1, fontWeight: 500 }}
+        >
+          Ask
+        </h1>
+        <p className="text-[16px] leading-relaxed text-[var(--ink-2)] max-w-2xl">
+          Ask about anything happening across the SF civic process — by topic,
+          neighborhood, district, or source.
+        </p>
+      </div>
+      <AskInput initial="" autoFocus size="md" />
+      <div className="flex flex-col gap-3">
+        <Eyebrow>Try asking</Eyebrow>
+        <ul className="flex flex-col gap-2">
+          {EXAMPLES.map((q) => (
+            <li key={q}>
+              <Link
+                href={`/ask?q=${encodeURIComponent(q)}`}
+                className="font-serif italic text-[var(--ink-2)] hover:text-[var(--ink)]"
+                style={{ fontSize: 17 }}
+              >
+                &ldquo;{q}&rdquo;
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </main>
   );
 }
 
@@ -152,23 +202,7 @@ export default async function AskPage({
   const raw = await searchParams;
   const q = typeof raw.q === 'string' ? raw.q.trim() : '';
 
-  // Empty state — show the input only.
-  if (!q) {
-    return (
-      <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 px-6 py-12">
-        <header className="flex flex-col gap-2">
-          <h1 className="text-2xl font-semibold tracking-tight">Ask</h1>
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">
-            Ask a question about San Francisco civic activity. Examples: &ldquo;What&rsquo;s
-            happening with housing in the Mission?&rdquo; · &ldquo;Show me budget items
-            this month&rdquo; · &ldquo;Anything from the Planning Commission about
-            Treasure Island?&rdquo;
-          </p>
-        </header>
-        <AskInput initial="" autoFocus />
-      </main>
-    );
-  }
+  if (!q) return <EmptyState />;
 
   // Parse → fetch → synthesize. Each step's failure mode renders inline.
   let parseErr: string | null = null;
@@ -176,8 +210,7 @@ export default async function AskPage({
   try {
     filters = await parseQuery(q);
   } catch (err) {
-    parseErr =
-      err instanceof ParseError ? err.message : 'Search is unavailable right now.';
+    parseErr = err instanceof ParseError ? err.message : 'Search is unavailable right now.';
   }
 
   const items = filters ? await findRelevantItems(filters) : [];
@@ -195,28 +228,40 @@ export default async function AskPage({
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 px-6 py-12">
-      <header className="flex flex-col gap-3">
-        <h1 className="text-2xl font-semibold tracking-tight">Ask</h1>
-        <AskInput initial={q} />
-        {filters && <FiltersChips filters={filters} />}
+    <main className="mx-auto max-w-7xl px-10 py-12 flex flex-col gap-8">
+      <header className="flex flex-col gap-4">
+        <h1
+          className="font-serif tracking-tight text-[var(--ink)]"
+          style={{ fontSize: 38, lineHeight: 1.1, fontWeight: 500 }}
+        >
+          &ldquo;{q}&rdquo;
+        </h1>
+        <AskInput initial={q} size="md" />
       </header>
 
       {parseErr && (
-        <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200">
+        <div
+          className="rounded-[6px] px-4 py-3 text-[14px]"
+          style={{
+            background: 'oklch(0.95 0.04 25)',
+            border: '1px solid oklch(0.84 0.10 25)',
+            color: 'oklch(0.42 0.13 25)',
+          }}
+        >
           {parseErr}
         </div>
       )}
 
       {filters && (
-        <section className="flex flex-col gap-2 rounded-lg border border-sky-200 bg-sky-50/50 p-5 dark:border-sky-900/60 dark:bg-sky-950/30">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-sky-700 dark:text-sky-300">
-            Answer
-          </h2>
+        <section className="border-l-2 border-[var(--accent)] pl-6 py-2 flex flex-col gap-2">
+          <Eyebrow>Answer</Eyebrow>
           {synthErr ? (
-            <p className="text-sm text-zinc-600 dark:text-zinc-400">{synthErr}</p>
+            <p className="text-[16px] leading-relaxed text-[var(--ink-2)]">{synthErr}</p>
           ) : (
-            <p className="text-sm leading-relaxed text-zinc-800 dark:text-zinc-200">
+            <p
+              className="font-serif leading-relaxed text-[var(--ink)]"
+              style={{ fontSize: 19 }}
+            >
               {renderAnswerWithCitations(answer, ctx.length)}
             </p>
           )}
@@ -225,10 +270,7 @@ export default async function AskPage({
 
       {filters && items.length > 0 && (
         <section className="flex flex-col gap-3">
-          <div className="flex items-baseline justify-between">
-            <h2 className="text-lg font-medium">Matching items</h2>
-            <span className="text-xs text-zinc-500">{items.length}</span>
-          </div>
+          <SectionRule label="Matching items" count={items.length} />
           <ol className="flex flex-col gap-3">
             {items.map((it, idx) => {
               const n = idx + 1;
@@ -236,44 +278,58 @@ export default async function AskPage({
                 <li
                   key={it.id}
                   id={`item-${n}`}
-                  className="flex flex-col gap-2 rounded-md border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-950"
+                  className="grid gap-x-4 p-5 border border-[var(--rule)] rounded-[8px] bg-[var(--paper)]"
+                  style={{ gridTemplateColumns: '32px 1fr' }}
                 >
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
-                    <span className="font-mono text-zinc-400">[{n}]</span>
-                    <Badge variant="source">{sourceName(it.meetings.source_id)}</Badge>
-                    <time>{formatDate(it.meetings.meeting_date)}</time>
-                  </div>
-                  <h3 className="text-sm font-medium leading-snug">
-                    <Link href={`/meetings/${it.meeting_id}`} className="hover:underline">
-                      {it.title}
-                    </Link>
-                  </h3>
-                  {it.summary && (
-                    <p className="text-sm text-zinc-600 dark:text-zinc-400">{it.summary}</p>
-                  )}
-                  <div className="flex flex-wrap gap-1.5">
-                    {it.district != null && (
-                      <Badge variant="district">District {it.district}</Badge>
-                    )}
-                    {(it.neighborhoods ?? []).map((nbh) => (
-                      <Badge key={nbh} variant="neighborhood">
-                        {nbh}
-                      </Badge>
-                    ))}
-                    {(it.topics ?? []).map((t) => (
-                      <Badge key={t} variant="topic">
-                        {t}
-                      </Badge>
-                    ))}
-                  </div>
-                  {it.matter_file_number && (
-                    <Link
-                      href={`/projects/${it.matter_file_number}`}
-                      className="w-fit text-xs text-sky-700 underline dark:text-sky-400"
+                  <span className="font-mono text-[12px] tabular-nums text-[var(--ink-3)] pt-1">
+                    [{n}]
+                  </span>
+                  <div className="flex flex-col gap-2 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2.5 text-[13px] text-[var(--ink-2)]">
+                      <SourcePill sourceId={it.meetings.source_id} />
+                      <time>{fmtDate(it.meetings.meeting_date)}</time>
+                    </div>
+                    <h3
+                      className="font-serif font-medium leading-snug text-[var(--ink)]"
+                      style={{ fontSize: 19 }}
                     >
-                      File #{it.matter_file_number} — track this legislation →
-                    </Link>
-                  )}
+                      <Link
+                        href={`/meetings/${it.meeting_id}`}
+                        className="hover:underline"
+                      >
+                        {it.title}
+                      </Link>
+                    </h3>
+                    {it.summary && (
+                      <p
+                        className="leading-relaxed text-[var(--ink-2)]"
+                        style={{ fontSize: 15 }}
+                      >
+                        {it.summary}
+                      </p>
+                    )}
+                    {(it.district != null ||
+                      (it.neighborhoods ?? []).length > 0 ||
+                      (it.topics ?? []).length > 0) && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {it.district != null && <DistrictChip district={it.district} />}
+                        {(it.neighborhoods ?? []).map((nbh) => (
+                          <NeighborhoodChip key={nbh} name={nbh} />
+                        ))}
+                        {(it.topics ?? []).map((t) => (
+                          <TopicTag key={t} topic={t} />
+                        ))}
+                      </div>
+                    )}
+                    {it.matter_file_number && (
+                      <Link
+                        href={`/projects/${it.matter_file_number}`}
+                        className="w-fit text-[12.5px] text-[var(--ink-3)] underline hover:text-[var(--ink-2)]"
+                      >
+                        FILE № {it.matter_file_number} — track legislation →
+                      </Link>
+                    )}
+                  </div>
                 </li>
               );
             })}
@@ -282,7 +338,7 @@ export default async function AskPage({
       )}
 
       {filters && items.length === 0 && !parseErr && (
-        <p className="rounded-md border border-dashed border-zinc-300 px-4 py-6 text-sm text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+        <p className="rounded-[6px] border border-dashed border-[var(--rule)] px-4 py-6 text-[14px] text-[var(--ink-2)]">
           No matching items. Try a broader topic, neighborhood, or date range.
         </p>
       )}

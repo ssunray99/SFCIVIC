@@ -1,7 +1,9 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { createServerClient } from '@/lib/supabase/server';
 import { NEIGHBORHOODS, type Neighborhood } from '@/lib/constants';
 import { MeetingCard, type MeetingCardData } from '@/components/MeetingCard';
+import { Eyebrow, Pill, SectionRule } from '@/components/primitives';
 
 export const revalidate = 300;
 
@@ -10,6 +12,8 @@ const SELECT = `
   source_id,
   title,
   meeting_date,
+  meeting_time,
+  location,
   agenda_url,
   needs_ocr,
   agenda_items (
@@ -34,15 +38,23 @@ function toSlug(n: string) {
 }
 
 function fromSlug(slug: string): Neighborhood | null {
-  return (NEIGHBORHOODS as readonly string[]).find((n) => toSlug(n) === slug) as Neighborhood ?? null;
+  return (
+    (NEIGHBORHOODS as readonly string[]).find((n) => toSlug(n) === slug) as Neighborhood ?? null
+  );
 }
 
 function isCitywide(item: MeetingCardData['agenda_items'][number]): boolean {
   return item.district === null && item.neighborhoods.length === 0;
 }
 
-function matchesNeighborhood(m: MeetingCardData, n: Neighborhood, includeCitywide: boolean): boolean {
-  return m.agenda_items.some((i) => i.neighborhoods.includes(n) || (includeCitywide && isCitywide(i)));
+function matchesNeighborhood(
+  m: MeetingCardData,
+  n: Neighborhood,
+  includeCitywide: boolean,
+): boolean {
+  return m.agenda_items.some(
+    (i) => i.neighborhoods.includes(n) || (includeCitywide && isCitywide(i)),
+  );
 }
 
 export function generateStaticParams() {
@@ -98,92 +110,76 @@ export default async function NeighborhoodPage({
   );
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-12">
-      <a href="/neighborhoods" className="text-sm text-zinc-500 hover:underline dark:text-zinc-400">
+    <main className="mx-auto max-w-7xl px-10 py-10 flex flex-col gap-7">
+      <Link
+        href="/neighborhoods"
+        className="font-mono uppercase text-[11px] tracking-[0.16em] text-[var(--ink-3)] hover:text-[var(--ink-2)] w-fit"
+      >
         ← All neighborhoods
-      </a>
+      </Link>
 
       <header className="flex flex-col gap-3">
-        <h1 className="text-3xl font-semibold tracking-tight">{neighborhood}</h1>
-        <p className="text-zinc-600 dark:text-zinc-400">
+        <h1
+          className="font-serif tracking-tight text-[var(--ink)]"
+          style={{ fontSize: 48, lineHeight: 1, fontWeight: 500 }}
+        >
+          {neighborhood}
+        </h1>
+        <p className="text-[15.5px] leading-relaxed text-[var(--ink-2)] max-w-2xl">
           Civic meetings with agenda items affecting {neighborhood}.
         </p>
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-zinc-500">Show:</span>
-          <a
-            href={`/neighborhoods/${slug}`}
-            className={`rounded-md px-3 py-1 ${!includeCitywide ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800'}`}
-          >
+        <div className="flex flex-wrap items-center gap-2.5">
+          <Eyebrow>Show</Eyebrow>
+          <Pill href={`/neighborhoods/${slug}`} active={!includeCitywide}>
             {neighborhood}-specific only
-          </a>
-          <a
-            href={`/neighborhoods/${slug}?citywide=show`}
-            className={`rounded-md px-3 py-1 ${includeCitywide ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : 'border border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800'}`}
-          >
+          </Pill>
+          <Pill href={`/neighborhoods/${slug}?citywide=show`} active={includeCitywide}>
             All items (incl. citywide)
-          </a>
+          </Pill>
         </div>
-        <a
-          href={`/?neighborhood=${encodeURIComponent(neighborhood)}`}
-          className="w-fit text-sm text-zinc-500 underline"
-        >
-          Filter homepage by {neighborhood} →
-        </a>
       </header>
 
-      <section className="flex flex-col gap-4">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-lg font-medium">Upcoming</h2>
-          <span className="text-xs text-zinc-500">{upcoming.length}</span>
-        </div>
+      <section className="flex flex-col gap-5">
+        <SectionRule label="Upcoming" count={upcoming.length} />
         {upcoming.length === 0 ? (
-          <p className="text-sm text-zinc-500">No upcoming meetings with items in {neighborhood}.</p>
+          <p className="text-[14.5px] text-[var(--ink-3)]">
+            No upcoming meetings with items in {neighborhood}.
+          </p>
         ) : (
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-5">
             {upcoming.map((m) => (
-              <MeetingCard key={m.id} meeting={m} filterItems={(i) => i.neighborhoods.includes(neighborhood) || (includeCitywide && isCitywide(i))} />
+              <MeetingCard
+                key={m.id}
+                meeting={m}
+                filterItems={(i) =>
+                  i.neighborhoods.includes(neighborhood) || (includeCitywide && isCitywide(i))
+                }
+              />
             ))}
           </div>
         )}
       </section>
 
-      <section className="flex flex-col gap-4">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-lg font-medium">Past meetings</h2>
-          <span className="text-xs text-zinc-500">{past.length}</span>
-        </div>
+      <section className="flex flex-col gap-5">
+        <SectionRule label="Past meetings" count={past.length} />
         {past.length === 0 ? (
-          <p className="text-sm text-zinc-500">No past meetings with items in {neighborhood}.</p>
+          <p className="text-[14.5px] text-[var(--ink-3)]">
+            No past meetings with items in {neighborhood}.
+          </p>
         ) : (
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-5">
             {past.map((m) => (
-              <MeetingCard key={m.id} meeting={m} filterItems={(i) => i.neighborhoods.includes(neighborhood) || (includeCitywide && isCitywide(i))} />
+              <MeetingCard
+                key={m.id}
+                meeting={m}
+                filterItems={(i) =>
+                  i.neighborhoods.includes(neighborhood) || (includeCitywide && isCitywide(i))
+                }
+              />
             ))}
           </div>
         )}
       </section>
-
-      <footer className="border-t border-zinc-200 pt-6 text-xs text-zinc-500 dark:border-zinc-800">
-        Unofficial. Summaries are AI-generated. For canonical agendas see{' '}
-        <a
-          className="underline"
-          href="https://sfplanning.org/hearings-commission"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          sfplanning.org
-        </a>{' '}
-        and{' '}
-        <a
-          className="underline"
-          href="https://sfbos.org/meetings"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          sfbos.org
-        </a>
-        .
-      </footer>
     </main>
   );
 }

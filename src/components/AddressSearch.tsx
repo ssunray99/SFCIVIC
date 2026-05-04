@@ -1,5 +1,8 @@
 'use client';
 
+// Geocode-by-address form. Calls /api/locate, then routes to /meetings with
+// resolved neighborhood/district URL params. Inline error if geocode fails.
+
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 
@@ -7,16 +10,6 @@ type LocateResult = {
   neighborhood: string | null;
   district: number | null;
 };
-
-const inputClass =
-  'rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs text-zinc-700 shadow-sm ' +
-  'placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-sky-500 ' +
-  'dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:placeholder-zinc-500';
-
-const buttonClass =
-  'rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs text-zinc-700 shadow-sm ' +
-  'hover:border-zinc-400 hover:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-sky-500 ' +
-  'disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200';
 
 export function AddressSearch() {
   const router = useRouter();
@@ -35,7 +28,7 @@ export function AddressSearch() {
     try {
       const resp = await fetch(`/api/locate?address=${encodeURIComponent(address)}`);
       if (resp.status === 404) {
-        setError('Address not found in San Francisco');
+        setError("Couldn't find that address — try a neighborhood name");
         return;
       }
       if (!resp.ok) {
@@ -51,6 +44,8 @@ export function AddressSearch() {
       const next = new URLSearchParams();
       if (neighborhood) next.set('neighborhood', neighborhood);
       if (district != null) next.set('district', String(district));
+      next.set('addressMode', 'true');
+      next.set('view', 'all');
 
       router.push(`/meetings?${next.toString()}`);
     } catch {
@@ -61,24 +56,29 @@ export function AddressSearch() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-1.5">
+    <form onSubmit={handleSubmit} className="flex flex-col gap-2">
       <div className="flex gap-2">
         <input
           type="text"
           value={value}
-          onChange={(e) => { setValue(e.target.value); setError(null); }}
+          onChange={(e) => {
+            setValue(e.target.value);
+            setError(null);
+          }}
           placeholder="Enter an SF address…"
-          className={`${inputClass} w-56`}
+          className="flex-1 border border-[var(--rule)] bg-[var(--paper)] rounded-[6px] px-3.5 py-2.5 text-[15px] text-[var(--ink)] placeholder:text-[var(--ink-3)] outline-none focus:border-[var(--ink)]"
           aria-label="Search by address"
           disabled={loading}
         />
-        <button type="submit" className={buttonClass} disabled={loading || !value.trim()}>
-          {loading ? 'Locating…' : 'Find nearby'}
+        <button
+          type="submit"
+          disabled={loading || !value.trim()}
+          className="px-4 py-2.5 font-mono uppercase text-[12px] tracking-[0.16em] bg-[var(--ink)] text-[var(--paper)] rounded-[6px] disabled:opacity-60"
+        >
+          {loading ? 'Locating…' : 'Locate →'}
         </button>
       </div>
-      {error && (
-        <p className="text-xs text-red-600 dark:text-red-400">{error}</p>
-      )}
+      {error && <p className="text-[12px] text-[var(--accent)]">{error}</p>}
     </form>
   );
 }
