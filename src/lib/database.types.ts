@@ -277,6 +277,7 @@ export type Database = {
           raw_storage_path: string | null
           scraped_at: string
           source_id: string
+          text_length: number | null
           title: string
         }
         Insert: {
@@ -291,6 +292,7 @@ export type Database = {
           raw_storage_path?: string | null
           scraped_at?: string
           source_id: string
+          text_length?: number | null
           title: string
         }
         Update: {
@@ -305,6 +307,7 @@ export type Database = {
           raw_storage_path?: string | null
           scraped_at?: string
           source_id?: string
+          text_length?: number | null
           title?: string
         }
         Relationships: [

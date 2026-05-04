@@ -4,7 +4,7 @@ import { SYSTEM_PROMPT, TOOL_NAME, TOOL_SCHEMA, PROMPT_VERSION } from '../prompt
 
 const MODEL = 'claude-haiku-4-5-20251001';
 const MIN_TEXT_LENGTH = 200;
-const MAX_TEXT_LENGTH = 50_000;
+const MAX_TEXT_LENGTH = 100_000;
 
 export type ExtractedItem = {
   position?: number | null;

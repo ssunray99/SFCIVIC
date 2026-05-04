@@ -251,6 +251,7 @@ export async function scrape(): Promise<void> {
         agendaText = htmlToText(eventHtml);
       }
 
+      const textLength = agendaText.length;
       agendaText = agendaText.slice(0, MAX_TEXT_TOTAL);
 
       if (!usedAnyPdf && totalPdfsLinked > 0) {
@@ -299,6 +300,7 @@ export async function scrape(): Promise<void> {
         raw_storage_path: rawStoragePath,
         content_hash: contentHash,
         needs_ocr: needsOcr,
+        text_length: textLength,
       }).select('id').single();
 
       if (insertErr) {
@@ -319,6 +321,7 @@ export async function scrape(): Promise<void> {
                 raw_storage_path: rawStoragePath,
                 needs_ocr: needsOcr,
                 agenda_url: sourceUrl,
+                text_length: textLength,
               })
               .eq('id', existingRow.id);
 

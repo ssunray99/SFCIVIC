@@ -132,6 +132,7 @@ export async function scrapeBosMeetings(opts: BosScraperOptions): Promise<void> 
 
       if (!agendaText.trim()) agendaText = htmlToText(eventHtml);
 
+      const textLength = agendaText.length;
       agendaText = agendaText.slice(0, MAX_TEXT_TOTAL);
       const needsOcr = agendaText.trim().length < 200;
       if (needsOcr) console.warn(`${LOG} needs OCR: ${meetingUrl}`);
@@ -172,6 +173,7 @@ export async function scrapeBosMeetings(opts: BosScraperOptions): Promise<void> 
         raw_storage_path: rawStoragePath,
         content_hash: contentHash,
         needs_ocr: needsOcr,
+        text_length: textLength,
       });
 
       if (insertErr) {
@@ -229,7 +231,7 @@ async function collectMeetingUrls(
   log: string,
 ): Promise<void> {
   console.log(`${log} scanning listing: ${listingUrl}`);
-  const MAX_PAGES = 20;
+  const MAX_PAGES = 50;
 
   for (let pageNum = 0; pageNum < MAX_PAGES; pageNum++) {
     const sep = listingUrl.includes('?') ? '&' : '?';
