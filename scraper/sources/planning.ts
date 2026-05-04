@@ -213,12 +213,22 @@ export async function scrape(): Promise<void> {
           supporting: null as string | null,
           minutes: null as string | null,
         };
+        // Section buttons appear as `Agenda`, `Agenda PDF`, `Supporting`,
+        // `Minutes`, etc. — sfplanning.org started suffixing " PDF" on
+        // direct-PDF buttons in early 2026. Match each leading word
+        // case-insensitively, allowing an optional " PDF" / " (PDF)" suffix.
+        // Regexes inlined intentionally — defining a helper inside
+        // page.evaluate trips tsx/esbuild's __name wrapper which is
+        // undefined in the page context.
         for (const a of Array.from(document.querySelectorAll('a[href]'))) {
           const href = (a as HTMLAnchorElement).href;
-          const text = (a.textContent ?? '').trim().toLowerCase();
-          if (text === 'agenda' && !out.agenda) out.agenda = href;
-          else if (text === 'supporting' && !out.supporting) out.supporting = href;
-          else if (text === 'minutes' && !out.minutes) out.minutes = href;
+          const text = (a.textContent ?? '').trim();
+          // Skip buttons whose href is a placeholder like "INSERTLINK" — the
+          // page sometimes ships a Minutes button before the file is ready.
+          if (!href || /INSERTLINK/i.test(href)) continue;
+          if (!out.agenda && /^agenda(\s*\(?pdf\)?)?$/i.test(text)) out.agenda = href;
+          else if (!out.supporting && /^supporting(\s*\(?pdf\)?)?$/i.test(text)) out.supporting = href;
+          else if (!out.minutes && /^minutes(\s*\(?pdf\)?)?$/i.test(text)) out.minutes = href;
           // Fallback URL pattern for the SUPPORTING packet
           if (!out.supporting && href.includes('/resource/planning-commission-hearing-packet-')) {
             out.supporting = href;

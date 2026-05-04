@@ -4,6 +4,7 @@ import { SYSTEM_PROMPT, TOOL_NAME, TOOL_SCHEMA, PROMPT_VERSION } from '../prompt
 
 const MODEL = 'claude-haiku-4-5-20251001';
 const MIN_TEXT_LENGTH = 200;
+const MAX_TEXT_LENGTH = 50_000;
 
 export type ExtractedItem = {
   position?: number | null;
@@ -48,6 +49,13 @@ export async function extractAgendaItems(
     console.log(`[llm] text too short (${text.length} chars), skipping extraction`);
     return empty;
   }
+  if (text.length > MAX_TEXT_LENGTH) {
+    const dropped = text.length - MAX_TEXT_LENGTH;
+    console.warn(
+      `[llm] truncating "${meetingTitle}" — input ${text.length} chars exceeds cap ${MAX_TEXT_LENGTH}; ` +
+      `dropping last ${dropped} chars (${Math.round((100 * dropped) / text.length)}%)`,
+    );
+  }
 
   try {
     const client = getClient();
@@ -76,7 +84,7 @@ export async function extractAgendaItems(
       messages: [
         {
           role: 'user',
-          content: `Extract agenda items from this San Francisco civic meeting.\n\nMeeting: ${meetingTitle}\n\nAgenda text:\n${text.slice(0, 50_000)}`,
+          content: `Extract agenda items from this San Francisco civic meeting.\n\nMeeting: ${meetingTitle}\n\nAgenda text:\n${text.slice(0, MAX_TEXT_LENGTH)}`,
         },
       ],
     });

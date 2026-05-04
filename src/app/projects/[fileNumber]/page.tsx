@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { createServerClient } from '@/lib/supabase/server';
 import { SOURCES } from '@/lib/constants';
 import { Badge } from '@/components/Badge';
+import { ItemCard, type ItemCardData } from '@/components/ItemCard';
 
 export const revalidate = 300;
 
@@ -86,9 +87,17 @@ export default async function ProjectPage({
       .from('agenda_items')
       .select(`
         id,
+        position,
         title,
         summary,
         item_type,
+        district,
+        neighborhoods,
+        topics,
+        comment_deadline,
+        comment_email,
+        comment_portal_url,
+        in_person_slot,
         meeting_id,
         meetings (
           id,
@@ -105,20 +114,18 @@ export default async function ProjectPage({
   // If neither legislation metadata nor any appearances exist, 404.
   const legislation = legislationRes.data;
   const history = historyRes.data ?? [];
-  const appearances = (appearancesRes.data ?? []) as Array<{
-    id: string;
-    title: string;
-    summary: string | null;
-    item_type: string | null;
-    meeting_id: string;
-    meetings: {
-      id: string;
-      source_id: string;
-      title: string;
-      meeting_date: string;
-      agenda_url: string | null;
-    } | null;
-  }>;
+  const appearances = (appearancesRes.data ?? []) as Array<
+    ItemCardData & {
+      meeting_id: string;
+      meetings: {
+        id: string;
+        source_id: string;
+        title: string;
+        meeting_date: string;
+        agenda_url: string | null;
+      } | null;
+    }
+  >;
 
   if (!legislation && appearances.length === 0) notFound();
 
@@ -192,39 +199,26 @@ export default async function ProjectPage({
           <h2 className="text-lg font-medium">
             Committee appearances ({sortedAppearances.length})
           </h2>
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-4">
             {sortedAppearances.map((item) => {
               const meeting = item.meetings;
+              const today = new Date().toISOString().slice(0, 10);
+              const meetingUpcoming = meeting ? meeting.meeting_date >= today : false;
               return (
-                <div
-                  key={item.id}
-                  className="rounded-md border border-zinc-200 p-4 dark:border-zinc-700"
-                >
-                  <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-                    {meeting && (
-                      <>
-                        <Badge variant="source">{sourceName(meeting.source_id)}</Badge>
-                        <time>
-                          {formatDate(meeting.meeting_date)}
-                        </time>
-                      </>
-                    )}
-                    {item.item_type && <Badge variant="muted">{item.item_type}</Badge>}
-                  </div>
-                  <p className="text-sm font-medium">{item.title}</p>
-                  {item.summary && (
-                    <p className="mt-1 text-xs leading-relaxed text-zinc-600 dark:text-zinc-400">
-                      {item.summary}
-                    </p>
-                  )}
+                <div key={item.id} className="flex flex-col gap-2">
                   {meeting && (
-                    <a
-                      href={`/meetings/${meeting.id}`}
-                      className="mt-2 block text-xs text-sky-700 underline dark:text-sky-400"
-                    >
-                      View full meeting →
-                    </a>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                      <Badge variant="source">{sourceName(meeting.source_id)}</Badge>
+                      <time>{formatDate(meeting.meeting_date)}</time>
+                      <a
+                        href={`/meetings/${meeting.id}`}
+                        className="text-sky-700 underline dark:text-sky-400"
+                      >
+                        View full meeting →
+                      </a>
+                    </div>
                   )}
+                  <ItemCard item={item} meetingUpcoming={meetingUpcoming} />
                 </div>
               );
             })}

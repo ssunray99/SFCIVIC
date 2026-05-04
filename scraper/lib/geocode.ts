@@ -80,9 +80,15 @@ async function fetchNominatim(address: string): Promise<GeocodeResult | null> {
   }
 }
 
+// Negative-cache entries (lat/lng null) are retried after this many days.
+// Nominatim's coverage of new SF addresses changes over time, so a permanent
+// "we tried once, never again" rule causes addresses to stay unresolved forever.
+const NEGATIVE_CACHE_TTL_DAYS = 30;
+
 /**
  * Geocode a raw address string. Cache-first; on miss, calls Nominatim and
  * writes the result (or absence) to address_cache so the next call is free.
+ * Negative-cache entries older than NEGATIVE_CACHE_TTL_DAYS are re-attempted.
  */
 export async function geocodeAddress(raw: string): Promise<GeocodeResult | null> {
   const norm = normalizeAddress(raw);
@@ -90,25 +96,38 @@ export async function geocodeAddress(raw: string): Promise<GeocodeResult | null>
 
   const supabase = createAdminClient();
 
-  const { data: cached } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const db = supabase as any;
+  const { data: cached } = await db
     .from('address_cache')
-    .select('lat, lng, source')
+    .select('lat, lng, source, last_attempted_at')
     .eq('address_norm', norm)
     .maybeSingle();
 
   if (cached) {
-    if (cached.lat == null || cached.lng == null) return null; // negative cache
-    return { lat: cached.lat, lng: cached.lng, source: 'cache' };
+    if (cached.lat != null && cached.lng != null) {
+      return { lat: cached.lat, lng: cached.lng, source: 'cache' };
+    }
+    // Negative cache: retry if stale, otherwise return null.
+    const lastAttempt = cached.last_attempted_at
+      ? new Date(cached.last_attempted_at).getTime()
+      : 0;
+    const ageMs = Date.now() - lastAttempt;
+    if (ageMs < NEGATIVE_CACHE_TTL_DAYS * 86400_000) {
+      return null;
+    }
+    // Fall through to re-attempt.
   }
 
   const fresh = await fetchNominatim(norm);
 
   // Upsert (positive or negative). lat/lng null = "we tried, no result".
-  await supabase.from('address_cache').upsert({
+  await db.from('address_cache').upsert({
     address_norm: norm,
     lat: fresh?.lat ?? null,
     lng: fresh?.lng ?? null,
     source: fresh?.source ?? 'nominatim',
+    last_attempted_at: new Date().toISOString(),
   });
 
   return fresh;

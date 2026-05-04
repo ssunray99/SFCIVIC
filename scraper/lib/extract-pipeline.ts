@@ -80,18 +80,22 @@ async function enrichItem(item: ExtractedItem): Promise<EnrichedItem> {
   };
 }
 
-export async function persistExtractedItems(
+/**
+ * Persist already-extracted items. Use when you've called extractAgendaItems
+ * yourself (e.g., to inspect items before committing destructive operations
+ * like deleting stale rows). For the standard scrape path, prefer
+ * persistExtractedItems below — it wraps extract + persist in one call.
+ */
+export async function persistItems(
   supabase: SupabaseClient,
   meetingId: string,
-  meetingTitle: string,
-  agendaText: string,
-): Promise<void> {
-  console.log(`[extract] running for meeting ${meetingId}`);
-  const { items, promptVersion, model } = await extractAgendaItems(agendaText, meetingTitle);
-
+  items: ExtractedItem[],
+  promptVersion: string,
+  model: string,
+): Promise<{ inserted: number; locations: number }> {
   if (items.length === 0) {
     console.log(`[extract] no items for ${meetingId}`);
-    return;
+    return { inserted: 0, locations: 0 };
   }
 
   const enriched: EnrichedItem[] = [];
@@ -124,7 +128,7 @@ export async function persistExtractedItems(
 
   if (error || !inserted) {
     console.error(`[extract] agenda_items insert failed for ${meetingId}:`, error?.message);
-    return;
+    return { inserted: 0, locations: 0 };
   }
 
   // Pair inserted item IDs back with their resolved locations and bulk-insert.
@@ -165,4 +169,20 @@ export async function persistExtractedItems(
   console.log(
     `[extract] ✓ ${inserted.length} item(s), ${locationRows.length} location(s) for ${meetingId}`,
   );
+  return { inserted: inserted.length, locations: locationRows.length };
+}
+
+/**
+ * Standard scrape path: extract via LLM and persist in one call.
+ * Returns silently when no items are extracted.
+ */
+export async function persistExtractedItems(
+  supabase: SupabaseClient,
+  meetingId: string,
+  meetingTitle: string,
+  agendaText: string,
+): Promise<void> {
+  console.log(`[extract] running for meeting ${meetingId}`);
+  const { items, promptVersion, model } = await extractAgendaItems(agendaText, meetingTitle);
+  await persistItems(supabase, meetingId, items, promptVersion, model);
 }
