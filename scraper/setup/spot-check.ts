@@ -27,7 +27,7 @@ const items = (raw ?? []).map((r: any) => ({
 console.log(`\nTotal items sampled: ${items.length}`);
 
 // ── 1. Tagging rates by source ──────────────────────────────────────────────
-const sources = ([...new Set(items.map((i: any) => i.source_id as string))] as string[]).sort();
+const sources = [...new Set(items.map((i: any) => i.source_id as string))].sort() as string[];
 console.log('\n=== TAGGING RATES BY SOURCE ===');
 console.log('source                         | items | nbhd       | district   | topics');
 console.log('-------------------------------|-------|------------|------------|----------');

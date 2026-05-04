@@ -43,6 +43,7 @@ export type Database = {
         Row: {
           address_norm: string
           created_at: string
+          last_attempted_at: string
           lat: number | null
           lng: number | null
           source: string | null
@@ -50,6 +51,7 @@ export type Database = {
         Insert: {
           address_norm: string
           created_at?: string
+          last_attempted_at?: string
           lat?: number | null
           lng?: number | null
           source?: string | null
@@ -57,6 +59,7 @@ export type Database = {
         Update: {
           address_norm?: string
           created_at?: string
+          last_attempted_at?: string
           lat?: number | null
           lng?: number | null
           source?: string | null
