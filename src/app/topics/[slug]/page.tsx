@@ -24,7 +24,8 @@ const SELECT = `
     comment_deadline,
     comment_email,
     comment_portal_url,
-    in_person_slot
+    in_person_slot,
+    matter_file_number
   )
 `;
 

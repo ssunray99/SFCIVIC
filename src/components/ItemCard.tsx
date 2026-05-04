@@ -13,6 +13,7 @@ export type ItemCardData = {
   comment_email: string | null;
   comment_portal_url: string | null;
   in_person_slot: string | null;
+  matter_file_number?: string | null;
 };
 
 const formatDeadline = (iso: string) =>
@@ -114,6 +115,15 @@ export function ItemCard({
       })()}
 
       <ActionCTA item={item} meetingUpcoming={meetingUpcoming} />
+
+      {item.matter_file_number && (
+        <a
+          href={`/projects/${item.matter_file_number}`}
+          className="mt-1 w-fit text-xs text-sky-700 underline dark:text-sky-400"
+        >
+          File #{item.matter_file_number} — track this legislation →
+        </a>
+      )}
     </article>
   );
 }
