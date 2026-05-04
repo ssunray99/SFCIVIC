@@ -33,11 +33,27 @@ export function FilterBar() {
   const district = params.get('district') ?? '';
   const source = params.get('source') ?? '';
   const q = params.get('q') ?? '';
+  const from = params.get('from') ?? '';
+  const to = params.get('to') ?? '';
+
+  const dateRangeLabel = (() => {
+    if (from && to) return `${from} → ${to}`;
+    if (from) return `from ${from}`;
+    if (to) return `until ${to}`;
+    return null;
+  })();
 
   // Local draft for the search input so typing doesn't trigger a navigation
   // on every keystroke — only on Enter or when the form is submitted.
   const [draft, setDraft] = useState(q);
   useEffect(() => { setDraft(q); }, [q]);
+
+  const clearDateRange = useCallback(() => {
+    const next = new URLSearchParams(params.toString());
+    next.delete('from');
+    next.delete('to');
+    router.replace(`/?${next.toString()}`);
+  }, [params, router]);
 
   const active = (
     [
@@ -46,6 +62,7 @@ export function FilterBar() {
       topic && { key: 'topic', label: topic },
       district && { key: 'district', label: `District ${district}` },
       source && { key: 'source', label: SOURCES.find((s) => s.id === source)?.name ?? source },
+      dateRangeLabel && { key: 'date-range', label: dateRangeLabel },
     ] as (false | { key: string; label: string })[]
   ).filter(Boolean) as { key: string; label: string }[];
 
@@ -128,7 +145,7 @@ export function FilterBar() {
           {active.map(({ key, label }) => (
             <button
               key={key}
-              onClick={() => update(key, '')}
+              onClick={() => (key === 'date-range' ? clearDateRange() : update(key, ''))}
               className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2.5 py-0.5 text-xs font-medium text-sky-800 hover:bg-sky-200 dark:bg-sky-900/40 dark:text-sky-200 dark:hover:bg-sky-900/70"
             >
               {label} <span aria-hidden="true">×</span>

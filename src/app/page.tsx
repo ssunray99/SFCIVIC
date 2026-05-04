@@ -3,6 +3,7 @@ import { createServerClient } from '@/lib/supabase/server';
 import { MeetingCard, type MeetingCardData } from '@/components/MeetingCard';
 import { FilterBar } from '@/components/FilterBar';
 import { AddressSearch } from '@/components/AddressSearch';
+import { NaturalLanguageSearch } from '@/components/NaturalLanguageSearch';
 import {
   NEIGHBORHOODS,
   TOPICS,
@@ -46,7 +47,11 @@ type Filters = {
   district: District | undefined;
   source: SourceId | undefined;
   q: string | undefined;
+  from: string | undefined;
+  to: string | undefined;
 };
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 function parseFilters(raw: Record<string, string | string[] | undefined>): Filters {
   const str = (k: string) => (typeof raw[k] === 'string' ? (raw[k] as string) : undefined);
@@ -56,6 +61,8 @@ function parseFilters(raw: Record<string, string | string[] | undefined>): Filte
   const districtRaw = str('district');
   const source = str('source');
   const districtNum = districtRaw !== undefined ? Number(districtRaw) : NaN;
+  const from = str('from');
+  const to = str('to');
 
   return {
     neighborhood: (NEIGHBORHOODS as readonly string[]).includes(neighborhood ?? '')
@@ -65,6 +72,8 @@ function parseFilters(raw: Record<string, string | string[] | undefined>): Filte
     district: DISTRICTS.includes(districtNum as District) ? (districtNum as District) : undefined,
     source: SOURCES.some((s) => s.id === source) ? (source as SourceId) : undefined,
     q: str('q')?.trim() || undefined,
+    from: from && ISO_DATE.test(from) ? from : undefined,
+    to: to && ISO_DATE.test(to) ? to : undefined,
   };
 }
 
@@ -93,7 +102,9 @@ const hasFilters = (f: Filters) =>
   f.topic !== undefined ||
   f.district !== undefined ||
   f.source !== undefined ||
-  f.q !== undefined;
+  f.q !== undefined ||
+  f.from !== undefined ||
+  f.to !== undefined;
 
 async function getMeetings(filters: Filters): Promise<{
   upcoming: MeetingCardData[];
@@ -120,13 +131,17 @@ async function getMeetings(filters: Filters): Promise<{
   const base = () => {
     let q = supabase.from('meetings').select(SELECT);
     if (filters.source) q = q.eq('source_id', filters.source);
+    if (filters.from) q = q.gte('meeting_date', filters.from);
+    if (filters.to) q = q.lte('meeting_date', filters.to);
     if (searchIds) q = q.in('id', searchIds);
     return q;
   };
 
+  const upcomingFloor = filters.from && filters.from > today ? filters.from : today;
+
   const [upcoming, past] = await Promise.all([
     base()
-      .gte('meeting_date', today)
+      .gte('meeting_date', upcomingFloor)
       .order('meeting_date', { ascending: true })
       .limit(filtered ? 200 : 50),
     base()
@@ -179,6 +194,7 @@ export default async function Home({
       </nav>
 
       <Suspense>
+        <NaturalLanguageSearch />
         <AddressSearch />
         <FilterBar />
       </Suspense>
