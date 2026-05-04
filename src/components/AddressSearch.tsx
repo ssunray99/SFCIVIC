@@ -66,14 +66,14 @@ export function AddressSearch() {
             setError(null);
           }}
           placeholder="Enter an SF address…"
-          className="flex-1 border border-[var(--rule)] bg-[var(--paper)] rounded-[6px] px-3.5 py-2.5 text-[15px] text-[var(--ink)] placeholder:text-[var(--ink-3)] outline-none focus:border-[var(--ink)]"
+          className="flex-1 border border-[var(--rule)] bg-[var(--paper)] rounded-[6px] px-3 py-2 text-[14px] text-[var(--ink)] placeholder:text-[var(--ink-3)] outline-none focus:border-[var(--ink)]"
           aria-label="Search by address"
           disabled={loading}
         />
         <button
           type="submit"
           disabled={loading || !value.trim()}
-          className="px-4 py-2.5 font-mono uppercase text-[12px] tracking-[0.16em] bg-[var(--ink)] text-[var(--paper)] rounded-[6px] disabled:opacity-60"
+          className="px-4 py-2 font-mono uppercase text-[11px] tracking-[0.16em] bg-[var(--ink)] text-[var(--paper)] rounded-[6px] disabled:opacity-60"
         >
           {loading ? 'Locating…' : 'Locate →'}
         </button>

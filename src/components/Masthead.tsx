@@ -30,7 +30,7 @@ export function Masthead() {
     <header className="border-b border-[var(--rule)]">
       <div className="h-1 bg-[var(--ink)]" />
       <div className="px-10 pt-5 pb-4 flex items-end justify-between gap-6">
-        <Link href="/" className="font-serif tracking-tight text-[var(--ink)]" style={{ fontSize: 28 }}>
+        <Link href="/" className="font-serif tracking-tight text-[var(--ink)]" style={{ fontSize: 26 }}>
           <span className="font-medium">SF</span>
           <span className="text-[var(--accent)] font-medium">·</span>
           <em className="font-medium">Civic</em>
@@ -42,7 +42,7 @@ export function Masthead() {
               <Link
                 key={l.href}
                 href={l.href}
-                className={`font-mono uppercase text-[12px] tracking-[0.16em] pb-0.5 border-b-2 transition-colors ${
+                className={`font-mono uppercase text-[11.5px] tracking-[0.16em] pb-0.5 border-b-2 transition-colors ${
                   active
                     ? 'text-[var(--ink)] border-[var(--accent)]'
                     : 'text-[var(--ink-3)] border-transparent hover:text-[var(--ink-2)]'
@@ -62,7 +62,7 @@ export function Footer() {
   return (
     <footer className="mt-16 px-10 pt-6 pb-10 border-t border-[var(--rule)]">
       <div className="flex flex-col gap-2 max-w-3xl">
-        <p className="text-[13.5px] leading-relaxed text-[var(--ink-2)]">
+        <p className="text-[12.5px] leading-relaxed text-[var(--ink-2)]">
           <strong className="font-medium text-[var(--ink)]">
             Unofficial — not an official City of San Francisco website.
           </strong>{' '}

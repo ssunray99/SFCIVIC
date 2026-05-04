@@ -71,9 +71,9 @@ export default async function Home() {
             </div>
           </div>
 
-          <div className="bg-[var(--paper-2)] border border-[var(--rule)] rounded-[6px] p-5 flex flex-col gap-2.5">
+          <div className="bg-[var(--paper-2)] border border-[var(--rule)] rounded-[6px] p-4 flex flex-col gap-2">
             <Eyebrow>Find by address</Eyebrow>
-            <p className="text-[14.5px] text-[var(--ink-2)] leading-relaxed">
+            <p className="text-[13.5px] text-[var(--ink-2)] leading-relaxed">
               Enter an SF address to see what&rsquo;s on the agenda for that
               neighborhood and district.
             </p>
@@ -132,17 +132,17 @@ function BrowseTile({
   return (
     <Link
       href={href}
-      className="bg-[var(--paper)] hover:bg-[var(--paper-2)] p-8 flex flex-col gap-3 text-left transition-colors"
+      className="bg-[var(--paper)] hover:bg-[var(--paper-2)] p-7 flex flex-col gap-2.5 text-left transition-colors"
     >
       <div
         className="font-serif tabular-nums text-[var(--ink)]"
-        style={{ fontSize: 72, lineHeight: 1, fontWeight: 500 }}
+        style={{ fontSize: 64, lineHeight: 1, fontWeight: 500 }}
       >
         {count}
       </div>
       <Eyebrow>{label}</Eyebrow>
-      <p className="text-[15.5px] text-[var(--ink-2)] leading-relaxed">{subtitle}</p>
-      <span className="mt-auto font-mono uppercase text-[12px] tracking-[0.16em] text-[var(--accent)]">View all →</span>
+      <p className="text-[14.5px] text-[var(--ink-2)] leading-relaxed">{subtitle}</p>
+      <span className="mt-auto font-mono uppercase text-[11.5px] tracking-[0.16em] text-[var(--accent)]">View all →</span>
     </Link>
   );
 }

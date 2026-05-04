@@ -39,7 +39,7 @@ function RotatingPlaceholder({ visible }: { visible: boolean }) {
       aria-hidden
       className="pointer-events-none absolute inset-0 flex items-center px-5 font-serif italic text-[var(--ink-3)] transition-all duration-[280ms]"
       style={{
-        fontSize: 21,
+        fontSize: 19,
         opacity: phase === 'in' ? 1 : 0,
         transform: phase === 'in' ? 'translateY(0)' : 'translateY(-8px)',
       }}
@@ -71,7 +71,7 @@ export function HeroAsk() {
         SF<span className="text-[var(--accent)]">·</span>
         <em>Civic</em>
       </h1>
-      <p className="text-[17px] leading-relaxed text-[var(--ink-2)] whitespace-nowrap">
+      <p className="text-[15.5px] leading-relaxed text-[var(--ink-2)] whitespace-nowrap">
         Explore and search across the San Francisco civic process for topics and neighborhoods you care about.
       </p>
 
@@ -83,7 +83,7 @@ export function HeroAsk() {
         className="flex w-full items-stretch border-2 border-[var(--ink)] bg-[var(--paper)]"
       >
         <div className="flex items-center border-r-2 border-[var(--ink)] px-4">
-          <span className="font-mono uppercase text-[11px] tracking-[0.2em] text-[var(--ink)]">
+          <span className="font-mono uppercase text-[10.5px] tracking-[0.2em] text-[var(--ink)]">
             Ask
           </span>
         </div>
@@ -94,8 +94,8 @@ export function HeroAsk() {
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder=""
-            className="w-full bg-transparent px-5 py-5 font-serif text-[var(--ink)] outline-none"
-            style={{ fontSize: 21 }}
+            className="w-full bg-transparent px-5 py-4 font-serif text-[var(--ink)] outline-none"
+            style={{ fontSize: 19 }}
             aria-label="Ask"
           />
           <RotatingPlaceholder visible={value.length === 0} />
@@ -103,14 +103,14 @@ export function HeroAsk() {
         <button
           type="submit"
           disabled={submitting || !value.trim()}
-          className="px-7 font-mono uppercase text-[12px] tracking-[0.18em] bg-[var(--accent)] text-[var(--paper)] disabled:opacity-60"
+          className="px-6 font-mono uppercase text-[11px] tracking-[0.18em] bg-[var(--accent)] text-[var(--paper)] disabled:opacity-60"
         >
           Ask&nbsp;&nbsp;→
         </button>
       </form>
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-        <span className="font-mono uppercase text-[11px] tracking-[0.2em] text-[var(--ink-3)]">
+        <span className="font-mono uppercase text-[10.5px] tracking-[0.2em] text-[var(--ink-3)]">
           Try asking
         </span>
         {EXAMPLES.map((q) => (
@@ -118,7 +118,7 @@ export function HeroAsk() {
             key={q}
             href={`/ask?q=${encodeURIComponent(q)}`}
             className="font-serif italic text-[var(--ink-2)] hover:text-[var(--ink)]"
-            style={{ fontSize: 17 }}
+            style={{ fontSize: 15.5 }}
           >
             &ldquo;{q}&rdquo;
           </Link>

@@ -46,19 +46,19 @@ export function ItemSubCard({
 
   return (
     <article
-      className="rounded-[6px] border border-[var(--rule)] bg-[var(--paper)] p-5 flex flex-col gap-2.5"
+      className="rounded-[6px] border border-[var(--rule)] bg-[var(--paper)] p-4 flex flex-col gap-2"
       id={item.matter_file_number ? `file-${item.matter_file_number}` : undefined}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="flex items-baseline gap-2.5 min-w-0">
+        <div className="flex items-baseline gap-2 min-w-0">
           {item.position != null && (
-            <span className="font-mono text-[14px] tabular-nums text-[var(--ink-3)] shrink-0">
+            <span className="font-mono text-[13px] tabular-nums text-[var(--ink-3)] shrink-0">
               #{item.position}
             </span>
           )}
           <h3
             className="font-serif font-medium leading-snug text-[var(--ink)]"
-            style={{ fontSize: 19 }}
+            style={{ fontSize: 18 }}
           >
             {item.title}
           </h3>
@@ -69,7 +69,7 @@ export function ItemSubCard({
       {item.summary && (
         <p
           className="leading-relaxed text-[var(--ink-2)]"
-          style={{ fontSize: 15 }}
+          style={{ fontSize: 14 }}
         >
           {item.summary}
         </p>
@@ -101,7 +101,7 @@ export function ItemSubCard({
       )}
 
       {item.matter_file_number && (
-        <div className="mt-1 flex flex-wrap items-baseline gap-2 text-[12.5px] text-[var(--ink-3)]">
+        <div className="mt-1 flex flex-wrap items-baseline gap-2 text-[12px] text-[var(--ink-3)]">
           <span className="font-mono">FILE № {item.matter_file_number}</span>
           <a
             href={`/projects/${item.matter_file_number}`}
