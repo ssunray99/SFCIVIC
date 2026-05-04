@@ -54,13 +54,29 @@ async function main() {
       `(${existingSet.size} already in legislation table)`,
   );
 
-  if (toEnrich.length === 0) {
+  // Only attempt Legistar enrichment for BOS-format file numbers (5–7 digits,
+  // e.g. "250604"). Planning Commission and HPC case numbers are not in Legistar.
+  function isLegistarCandidate(n: string): boolean {
+    return /^\d{5,7}$/.test(n);
+  }
+
+  const legistarCandidates = toEnrich.filter(isLegistarCandidate);
+  const nonLegistar = toEnrich.filter((n) => !isLegistarCandidate(n));
+
+  if (nonLegistar.length > 0) {
+    console.log(
+      `[legistar-enrich] skipping ${nonLegistar.length} non-BOS number(s)` +
+        ` (Planning/HPC case numbers, not in Legistar)`,
+    );
+  }
+
+  if (legistarCandidates.length === 0) {
     console.log('[legistar-enrich] nothing to do');
     return;
   }
 
   const ctx = await newContext();
-  const page = await ctx.newPage();
+  let page = await ctx.newPage();
 
   // 2. Navigate once to the Legislation search page and set it up.
   console.log(`[legistar-enrich] loading ${LEGISLATION_URL}`);
@@ -69,10 +85,14 @@ async function main() {
   let enriched = 0;
   let failed = 0;
 
-  for (const fileNumber of toEnrich) {
+  for (const fileNumber of legistarCandidates) {
     console.log(`[legistar-enrich] searching: ${fileNumber}`);
 
     try {
+      if (page.isClosed()) {
+        page = await ctx.newPage();
+      }
+
       // Navigate back to search page for each matter.
       await page.goto(LEGISLATION_URL, { waitUntil: 'networkidle', timeout: 30_000 });
 
@@ -96,11 +116,13 @@ async function main() {
       const fileInput = page.locator('#ctl00_ContentPlaceHolder1_txtSearch');
       await fileInput.fill(fileNumber);
 
-      // Submit via the visible search button.
-      await Promise.all([
-        page.waitForLoadState('networkidle', { timeout: 20_000 }),
-        page.locator('#visibleSearchButton').click(),
-      ]);
+      // Submit via the visible search button. Use sequential click → networkidle
+      // → explicit grid wait so Telerik's AJAX render completes before DOM read.
+      await page.locator('#visibleSearchButton').click();
+      await page.waitForLoadState('networkidle', { timeout: 20_000 });
+      await page
+        .waitForSelector('.rgRow, .rgEmptyRow, [class*="NoRecords"]', { timeout: 10_000 })
+        .catch(() => null);
 
       // Find the matching result row by checking only the FIRST cell (File # column).
       // Checking any cell causes false positives when P&C omnibus items reference
