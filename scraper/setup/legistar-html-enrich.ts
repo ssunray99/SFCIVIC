@@ -144,7 +144,10 @@ async function main() {
         const fieldValue = (labelText) => {
           const labels = Array.from(document.querySelectorAll('span, td, th, label'));
           for (const el of labels) {
-            if ((el.textContent || '').trim().toLowerCase().includes(labelText.toLowerCase())) {
+            const text = (el.textContent || '').trim();
+            // Skip container elements — field labels are short (< 60 chars).
+            if (text.length > 60) continue;
+            if (text.toLowerCase().includes(labelText.toLowerCase())) {
               const next = el.nextElementSibling
                 || (el.closest('tr') ? el.closest('tr').querySelector('td:last-child') : null);
               return next ? next.textContent.replace(/\\s+/g, ' ').trim() : null;
@@ -153,23 +156,53 @@ async function main() {
           return null;
         };
 
-        const title =
-          (document.querySelector('h1, .title, [class*="title"]') || {}).textContent || null;
+        // The page-level <h1> is always "Legislation Details" (Legistar template).
+        // The actual matter title lives in a specific ASP.NET label element.
+        // That element is a container — its textContent includes navigation tab
+        // text ("DetailsReports") followed by the metadata grid. Strip from that
+        // marker onward to get just the legislative title text.
+        const titleEl = document.querySelector('#ctl00_ContentPlaceHolder1_lblTitle2') ||
+          document.querySelector('[id*="lblTitle2"]') ||
+          document.querySelector('[id*="lblTitle1"]');
+        const rawTitleText = titleEl
+          ? (titleEl.textContent || '').replace(/\\s+/g, ' ').trim()
+          : '';
+        const title = rawTitleText.split('DetailsReports')[0].trim() || null;
 
+        // The real legislative history table uniquely has a "Ver." column header.
+        // The metadata/details grid also has "date" and "action" headers but never
+        // has "ver", so checking for "ver" distinguishes the two tables.
         const history = [];
         for (const table of Array.from(document.querySelectorAll('table'))) {
-          const headers = Array.from(table.querySelectorAll('th'))
-            .map(th => (th.textContent || '').trim().toLowerCase());
-          if (headers.some(h => h.includes('date')) && headers.some(h => h.includes('action'))) {
-            for (const row of Array.from(table.querySelectorAll('tbody tr'))) {
-              const cells = Array.from(row.querySelectorAll('td'))
-                .map(td => (td.textContent || '').replace(/\\s+/g, ' ').trim());
-              if (cells.length >= 2) {
-                history.push({ action_date: cells[0]||'', action: cells[1]||'', body: cells[2]||'', result: cells[3]||'' });
-              }
+          const ths = Array.from(table.querySelectorAll('th'));
+          const headers = ths.map(th => (th.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase());
+          const hasVer = headers.some(h => h === 'ver.' || h === 'ver' || h.startsWith('ver'));
+          const hasActionBy = headers.some(h => h.includes('action by'));
+          if (!hasVer && !hasActionBy) continue;
+
+          // Map column indices dynamically so order changes don't break us.
+          let dateIdx = 0, actionIdx = -1, bodyIdx = -1, resultIdx = -1;
+          headers.forEach((h, i) => {
+            if (h === 'date' || h === 'action date') dateIdx = i;
+            if (h === 'action' || (h.startsWith('action') && !h.includes('by') && !h.includes('detail') && !h.includes('date'))) {
+              if (actionIdx === -1) actionIdx = i;
             }
-            break;
+            if (h.includes('action by') || h === 'by') bodyIdx = i;
+            if (h.includes('result')) resultIdx = i;
+          });
+
+          for (const row of Array.from(table.querySelectorAll('tbody tr'))) {
+            const cells = Array.from(row.querySelectorAll('td'))
+              .map(td => (td.textContent || '').replace(/\\s+/g, ' ').trim());
+            if (cells.length < 2) continue;
+            history.push({
+              action_date: cells[dateIdx] || '',
+              action: actionIdx >= 0 ? (cells[actionIdx] || '') : (cells[3] || ''),
+              body: bodyIdx >= 0 ? (cells[bodyIdx] || '') : (cells[2] || ''),
+              result: resultIdx >= 0 ? (cells[resultIdx] || '') : (cells[4] || ''),
+            });
           }
+          break;
         }
 
         const t = (v, max) => v ? String(v).replace(/\\s+/g, ' ').trim().slice(0, max) : null;
@@ -177,10 +210,10 @@ async function main() {
           title: t(title, 1000),
           matter_type: t(fieldValue('Type') || fieldValue('Matter Type'), 200),
           status: t(fieldValue('Status'), 200),
-          current_body: t(fieldValue('Current Controlling Body') || fieldValue('Body'), 200),
+          current_body: t(fieldValue('Current Controlling Body') || fieldValue('In control') || fieldValue('Body'), 200),
           sponsor: t(fieldValue('Sponsor') || fieldValue('Sponsors'), 500),
-          intro_date: t(fieldValue('Introduced') || fieldValue('Intro Date'), 50),
-          final_action_date: t(fieldValue('Final Action') || fieldValue('Enactment Date'), 50),
+          intro_date: t(fieldValue('Introduced') || fieldValue('Intro Date') || fieldValue('File created'), 50),
+          final_action_date: t(fieldValue('Final Action') || fieldValue('Final action') || fieldValue('Enactment Date'), 50),
           history,
         };
       })()`) as {

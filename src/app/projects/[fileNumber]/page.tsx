@@ -122,7 +122,12 @@ export default async function ProjectPage({
 
   if (!legislation && appearances.length === 0) notFound();
 
-  const displayTitle = legislation?.title ?? appearances[0]?.title ?? `File #${fileNumber}`;
+  // "Legislation Details" is Legistar's page-level heading, not the matter title.
+  const legislationTitle =
+    legislation?.title && legislation.title.toLowerCase() !== 'legislation details'
+      ? legislation.title
+      : null;
+  const displayTitle = legislationTitle ?? appearances[0]?.title ?? `File #${fileNumber}`;
 
   // Sort appearances by meeting date descending.
   const sortedAppearances = [...appearances].sort((a, b) => {
@@ -236,7 +241,7 @@ export default async function ProjectPage({
                 <tr className="border-b border-zinc-200 text-left dark:border-zinc-700">
                   <th className="pb-2 pr-4 font-medium text-zinc-500">Date</th>
                   <th className="pb-2 pr-4 font-medium text-zinc-500">Action</th>
-                  <th className="pb-2 pr-4 font-medium text-zinc-500">Body</th>
+                  <th className="pb-2 pr-4 font-medium text-zinc-500">Committee</th>
                   <th className="pb-2 font-medium text-zinc-500">Result</th>
                 </tr>
               </thead>
