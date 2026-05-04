@@ -10,46 +10,28 @@ neighborhood or by topic ("anything about housing in District 5").
 for extraction.
 
 This is a learning project. The plan and milestones live at
-`/root/.claude/plans/i-want-to-build-silly-goblet.md`.
+`/root/.claude/plans/i-want-to-build-silly-goblet.md`. Milestone progress
+and architectural notes live in `CLAUDE.md`.
 
 ---
 
-## Status
+## Milestones
 
-**M12 complete.** SFMTA Board of Directors scraper added (`sfmta.com`
-Playwright — BoardDocs blocks automated fetches). All sources are live:
-Planning, HPC, BOS Full Board + 5 committees, SFMTA Board, and public
-hearing notices. **M13 complete.** Browse-by-neighborhood (`/neighborhoods/[slug]`)
-and browse-by-topic (`/topics/[slug]`) pages with static pre-generation.
-**M15 (analytics) complete.** `/analytics` page shows year-to-date item
-counts by neighborhood, topic, district, and source; cross-committee matter
-tracking; scraper health table. **M14 complete** — `legislation` table (migration 0004), Legistar HTML
-enrichment scraper (`scraper/setup/legistar-html-enrich.ts`), and
-`/projects/[fileNumber]` page are all live; 190 BOS matters enriched from
-`sfgov.legistar.com`. Re-run `npm run enrich:legislation` periodically as
-new file numbers accumulate. Supervisor vote/attendance accountability views
-require a data source not yet identified.
-
-| M   | Goal                                                              | State |
-| --- | ----------------------------------------------------------------- | ----- |
-| M1  | Skeleton, schema, shadcn walkthrough                              | ✅    |
-| M2  | Planning Commission scraper end-to-end (no LLM)                   | ✅    |
-| M3  | LLM extraction with Claude Haiku 4.5                              | ✅    |
-| M4  | BOS + hearings sources                                            | ✅    |
-| M5  | Frontend list page                                                | ✅    |
-| M6  | Filters & search                                                  | ✅    |
-| M7  | Detail pages + about                                              | ✅    |
-| M8  | GitHub Actions cron                                               | ✅    |
-| M9  | Vercel deploy                                                     | ✅    |
-| M10 | Address geocoding + implicit neighborhoods + action layer         | ✅    |
-| M11 | Address search UI (foreground for users)                          | ✅    |
-| M12 | Source expansion (HPC ✅, BOS committees ✅, SFMTA ✅)             | ✅    |
-| M13 | Browse-by-neighborhood / browse-by-topic pages                    | ✅    |
-| M14 | Project tracking (legislation table + /projects/[id] + enrichment) | ✅    |
-| M15 | Analytics ✅; supervisor vote/accountability needs data source    | 🔄    |
-
-Architectural detail for M11–M15 lives in `CLAUDE.md` under "Planned
-architecture."
+- M1 — Skeleton, schema, shadcn walkthrough
+- M2 — Planning Commission scraper end-to-end (no LLM)
+- M3 — LLM extraction with Claude Haiku 4.5
+- M4 — BOS + hearings sources
+- M5 — Frontend list page
+- M6 — Filters & search
+- M7 — Detail pages + about
+- M8 — GitHub Actions cron
+- M9 — Vercel deploy
+- M10 — Address geocoding + implicit neighborhoods + action layer
+- M11 — Address search UI (foreground for users)
+- M12 — Source expansion (HPC, BOS committees, SFMTA)
+- M13 — Browse-by-neighborhood / browse-by-topic pages
+- M14 — Project tracking (legislation table + /projects/[id] + enrichment)
+- M15 — Analytics; supervisor vote/accountability
 
 ---
 
@@ -146,37 +128,6 @@ npm run dev
 Visit <http://localhost:3000>. On Windows, use **PowerShell** or **Git Bash**
 — the commands in this README are bash-flavored but `npm`/`npx` work the same
 in PowerShell.
-
----
-
-## About shadcn/ui (the walkthrough you asked for)
-
-shadcn/ui is **not** a library you `npm install`. It's a CLI that *copies*
-React + Tailwind + Radix component source code into your repo, where you own
-and edit it directly. Think of it as "scaffolding" rather than a dependency.
-
-**Why this matters:**
-
-- You can customize any component by editing `src/components/ui/<name>.tsx`
-  directly. No library version to fight.
-- The scaffolding is small and tree-shakable — only the components you add
-  ship with the app.
-- The styling primitives (`cn` helper, CSS variables, Tailwind theme tokens)
-  are standardized across all shadcn components.
-
-**The deps are already installed** — `clsx`, `tailwind-merge`,
-`class-variance-authority`, `lucide-react`. The `cn` helper lives at
-`src/lib/utils.ts`.
-
-**To add components in your local dev environment:**
-
-```bash
-npx shadcn@latest init           # one-time setup of components.json + theme
-npx shadcn@latest add button badge card input select command popover
-```
-
-(The CLI fetches templates from <https://ui.shadcn.com> and writes them into
-`src/components/ui/`. We'll do this in M5/M6 when we build the filter UI.)
 
 ---
 
