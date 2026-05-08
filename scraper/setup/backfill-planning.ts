@@ -31,14 +31,13 @@ async function gatherTextFromLink(
   maxChars: number,
 ): Promise<string> {
   if (url.toLowerCase().endsWith('.pdf')) {
-    try {
-      const { bytes } = await fetchBytes(url);
-      const r = await extractPdfText(bytes);
-      return r.text.slice(0, maxChars);
-    } catch (err) {
-      console.warn(`[backfill] PDF fetch failed ${url}:`, err instanceof Error ? err.message : err);
+    const r = await fetchBytes(url);
+    if (!r.ok) {
+      console.warn(`[backfill] PDF fetch failed ${url}: ${r.message}`);
       return '';
     }
+    const parsed = await extractPdfText(r.bytes);
+    return parsed.text.slice(0, maxChars);
   }
   try {
     await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
@@ -56,17 +55,17 @@ async function gatherTextFromLink(
     let totalLen = parts[0].length;
     for (const linkedPdf of pdfLinks.slice(0, MAX_PDFS_PER_RESOURCE)) {
       if (totalLen >= maxChars) break;
-      try {
-        const { bytes } = await fetchBytes(linkedPdf);
-        const r = await extractPdfText(bytes);
-        if (r.text) {
-          const label = linkedPdf.split('/').pop() ?? linkedPdf;
-          const block = `\n--- ${label} ---\n${r.text.slice(0, MAX_TEXT_PER_PDF)}`;
-          parts.push(block);
-          totalLen += block.length;
-        }
-      } catch (err) {
-        console.warn(`[backfill] PDF fetch/parse failed ${linkedPdf}:`, err instanceof Error ? err.message : err);
+      const r = await fetchBytes(linkedPdf);
+      if (!r.ok) {
+        console.warn(`[backfill] PDF fetch failed ${linkedPdf}: ${r.message}`);
+        continue;
+      }
+      const parsed = await extractPdfText(r.bytes);
+      if (parsed.text) {
+        const label = linkedPdf.split('/').pop() ?? linkedPdf;
+        const block = `\n--- ${label} ---\n${parsed.text.slice(0, MAX_TEXT_PER_PDF)}`;
+        parts.push(block);
+        totalLen += block.length;
       }
     }
     return parts.join('\n').slice(0, maxChars);

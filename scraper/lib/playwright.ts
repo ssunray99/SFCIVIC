@@ -30,47 +30,94 @@ export async function newContext(): Promise<BrowserContext> {
   });
 }
 
-/**
- * Downloads a URL and returns its raw bytes + final MIME type.
- * Uses fetch rather than Playwright for binary content (PDFs).
- *
- * Retries once on transient bad responses: empty body, or PDF content-type
- * with bytes that don't start with %PDF-. sf.gov has been observed returning
- * truncated/empty bodies under sustained scraping; retry resolves it.
- */
-export async function fetchBytes(url: string): Promise<{
+export type FetchOk = {
+  ok: true;
   bytes: Buffer;
   mime: 'text/html' | 'application/pdf';
-}> {
-  const ATTEMPTS = 2;
-  let lastReason = '';
+};
 
-  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-          '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
-    const ct = res.headers.get('content-type') ?? '';
-    const mime = ct.includes('pdf') ? 'application/pdf' : 'text/html';
-    const bytes = Buffer.from(await res.arrayBuffer());
+export type FetchFail = {
+  ok: false;
+  status: number | null;       // null when the failure was network-level (no HTTP response)
+  url: string;
+  attempts: number;
+  message: string;
+};
 
-    if (bytes.length === 0) {
-      lastReason = 'empty body';
-    } else if (mime === 'application/pdf' && !bytes.subarray(0, 5).equals(Buffer.from('%PDF-'))) {
-      lastReason = `pdf content-type but no %PDF- magic (${bytes.length}B, first 8: ${bytes.subarray(0, 8).toString('hex')})`;
-    } else {
-      return { bytes, mime };
-    }
+export type FetchResult = FetchOk | FetchFail;
 
-    if (attempt < ATTEMPTS) {
-      console.warn(`[fetchBytes] retry ${attempt}/${ATTEMPTS - 1}: ${lastReason} for ${url}`);
-      await new Promise((r) => setTimeout(r, 500));
+const MAX_ATTEMPTS = 3;
+const BACKOFF_MS = [200, 800, 2400] as const;
+const TIMEOUT_MS = 30_000;
+
+/**
+ * Downloads a URL and returns either the raw bytes + MIME type or a
+ * structured failure descriptor. Retries up to 3 attempts on transient
+ * errors (5xx, 429, network); 4xx other than 429 fail fast.
+ *
+ * Callers used to call `fetchBytes(url)` and have it throw on non-200,
+ * which made partial PDF gathers silent. The structured return lets
+ * each source surface per-link failures into meeting.fetch_warnings.
+ */
+export async function fetchBytes(url: string): Promise<FetchResult> {
+  let lastStatus: number | null = null;
+  let lastMessage = '';
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+              '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          },
+          signal: ctrl.signal,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+
+      if (res.ok) {
+        const ct = res.headers.get('content-type') ?? '';
+        const mime = ct.includes('pdf') ? 'application/pdf' : 'text/html';
+        const bytes = Buffer.from(await res.arrayBuffer());
+        return { ok: true, bytes, mime };
+      }
+
+      lastStatus = res.status;
+      lastMessage = `HTTP ${res.status} fetching ${url}`;
+      // Retry only on transient HTTP statuses.
+      if (res.status >= 500 || res.status === 429 || res.status === 408) {
+        if (attempt < MAX_ATTEMPTS) {
+          await sleep(BACKOFF_MS[attempt - 1] + Math.floor(Math.random() * BACKOFF_MS[attempt - 1]));
+          continue;
+        }
+      }
+      break;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      lastStatus = null;
+      lastMessage = `network: ${msg}`;
+      if (attempt < MAX_ATTEMPTS) {
+        await sleep(BACKOFF_MS[attempt - 1] + Math.floor(Math.random() * BACKOFF_MS[attempt - 1]));
+        continue;
+      }
     }
   }
 
-  throw new Error(`bad response after ${ATTEMPTS} attempts (${lastReason}) for ${url}`);
+  return {
+    ok: false,
+    status: lastStatus,
+    url,
+    attempts: MAX_ATTEMPTS,
+    message: lastMessage || 'unknown fetch error',
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }

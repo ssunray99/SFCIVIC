@@ -4,7 +4,11 @@ import { sha256 } from './hash.ts';
 import { extractPdfText } from './pdf.ts';
 import { uploadRaw } from './storage.ts';
 import { htmlToText } from './llm.ts';
-import { persistExtractedItems } from './extract-pipeline.ts';
+import {
+  persistExtractedItems,
+  checkMeetingFreshness,
+  type GatherStats,
+} from './extract-pipeline.ts';
 import { createAdminClient } from '@/lib/supabase/admin.ts';
 
 const BASE_URL = 'https://www.sf.gov';
@@ -12,9 +16,11 @@ const EVENTS_UPCOMING = `${BASE_URL}/departments--board-supervisors/events/upcom
 const EVENTS_PAST = `${BASE_URL}/departments--board-supervisors/events/past`;
 const SCRAPE_FROM = `${new Date().getFullYear()}-01-01`;
 
-const MAX_TEXT_PER_PDF = 20_000;
-const MAX_TEXT_PER_RESOURCE = 80_000;
-const MAX_TEXT_TOTAL = 100_000;
+// Caps lifted from v3-era Claude budgets — Gemini 2.5 Flash has a 1M-token
+// window so we can afford much more raw context per meeting.
+const MAX_TEXT_PER_PDF = 100_000;
+const MAX_TEXT_PER_RESOURCE = 400_000;
+const MAX_TEXT_TOTAL = 500_000;
 
 export interface BosScraperOptions {
   sourceId: string;
@@ -111,11 +117,34 @@ export async function scrapeBosMeetings(opts: BosScraperOptions): Promise<void> 
       const today = new Date().toISOString().slice(0, 10);
       const isPast = !!meetingDate && meetingDate < today;
 
+      const bytes = Buffer.from(eventHtml);
+      const contentHash = sha256(bytes);
+      const externalId = meetingUrl.split('/').filter(Boolean).pop() ?? null;
+
+      // Idempotency: skip iff this exact event-page HTML is already extracted
+      // under v4. Otherwise we'll re-extract (covers transient LLM failures,
+      // partial gathers, and prompt-version upgrades).
+      const freshness = await checkMeetingFreshness(supabase, sourceId, contentHash);
+      if (freshness.fresh) {
+        console.log(`${LOG} already stored + extracted (status=success v=current), skipping`);
+        continue;
+      }
+      if (freshness.existingId) {
+        console.log(`${LOG} re-extracting existing meeting (status=${freshness.status})`);
+      }
+
+      // Now do the (possibly expensive) PDF gather.
+      const stats: GatherStats = {
+        scannedPdfs: [],
+        fetchWarnings: [],
+        expectedPdfCount: 0,
+        fetchedPdfCount: 0,
+      };
       let agendaText = '';
 
       if (sectionLinks.agenda) {
         console.log(`${LOG} agenda: ${sectionLinks.agenda}`);
-        const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_PER_RESOURCE, LOG);
+        const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_PER_RESOURCE, LOG, stats);
         agendaText += r.text;
       }
 
@@ -126,77 +155,98 @@ export async function scrapeBosMeetings(opts: BosScraperOptions): Promise<void> 
           sectionLinks.minutes,
           Math.min(MAX_TEXT_PER_RESOURCE, MAX_TEXT_TOTAL - agendaText.length),
           LOG,
+          stats,
         );
         if (r.text) agendaText += `\n\n======== MINUTES ========\n\n${r.text}`;
       }
 
       if (!agendaText.trim()) agendaText = htmlToText(eventHtml);
 
-      const textLength = agendaText.length;
       agendaText = agendaText.slice(0, MAX_TEXT_TOTAL);
-      const needsOcr = agendaText.trim().length < 200;
-      if (needsOcr) console.warn(`${LOG} needs OCR: ${meetingUrl}`);
-
       const sourceUrl = isPast ? meetingUrl : (sectionLinks.agenda ?? meetingUrl);
-      const bytes = Buffer.from(eventHtml);
-      const contentHash = sha256(bytes);
       const date = meetingDate ?? new Date().toISOString().slice(0, 10);
-      const externalId = meetingUrl.split('/').filter(Boolean).pop() ?? null;
 
-      const { data: existing } = await supabase
-        .from('meetings')
-        .select('id')
-        .eq('source_id', sourceId)
-        .or(`content_hash.eq.${contentHash},external_id.eq.${externalId}`)
-        .maybeSingle();
+      let meetingId: string | null = freshness.existingId;
 
-      if (existing) {
-        console.log(`${LOG} already stored, skipping`);
-        continue;
-      }
-
-      let rawStoragePath: string | null = null;
-      try {
-        rawStoragePath = await uploadRaw({ sourceId, contentHash, bytes, mime: 'text/html' });
-      } catch (err) {
-        console.warn(`${LOG} storage upload failed, continuing:`, err);
-      }
-
-      const fullTitle = `${meetingTitlePrefix} — ${title}`;
-
-      const { error: insertErr } = await supabase.from('meetings').insert({
-        source_id: sourceId,
-        external_id: externalId,
-        title: fullTitle,
-        meeting_date: date,
-        agenda_url: sourceUrl,
-        raw_storage_path: rawStoragePath,
-        content_hash: contentHash,
-        needs_ocr: needsOcr,
-        text_length: textLength,
-      });
-
-      if (insertErr) {
-        if (insertErr.code === '23505') {
-          console.log(`${LOG} duplicate insert skipped`);
-        } else {
-          console.error(`${LOG} insert error:`, insertErr.message);
+      if (!meetingId) {
+        // New meeting — insert.
+        let rawStoragePath: string | null = null;
+        try {
+          rawStoragePath = await uploadRaw({ sourceId, contentHash, bytes, mime: 'text/html' });
+        } catch (err) {
+          console.warn(`${LOG} storage upload failed, continuing:`, err);
         }
-        continue;
+
+        const fullTitle = `${meetingTitlePrefix} — ${title}`;
+
+        const { data: inserted, error: insertErr } = await supabase
+          .from('meetings')
+          .insert({
+            source_id: sourceId,
+            external_id: externalId,
+            title: fullTitle,
+            meeting_date: date,
+            agenda_url: sourceUrl,
+            raw_storage_path: rawStoragePath,
+            content_hash: contentHash,
+            needs_ocr: stats.scannedPdfs!.length > 0,
+          })
+          .select('id')
+          .single();
+
+        if (insertErr) {
+          if (insertErr.code === '23505') {
+            // (source_id, external_id) collision — content evolved since the
+            // original scrape. Update the row in place and re-extract.
+            console.log(`${LOG} content changed for ${externalId}, updating row`);
+            const { data: existingRow } = await supabase
+              .from('meetings')
+              .select('id')
+              .eq('source_id', sourceId)
+              .eq('external_id', externalId)
+              .maybeSingle();
+            if (existingRow) {
+              await supabase
+                .from('meetings')
+                .update({
+                  content_hash: contentHash,
+                  raw_storage_path: rawStoragePath,
+                  agenda_url: sourceUrl,
+                  needs_ocr: stats.scannedPdfs!.length > 0,
+                })
+                .eq('id', existingRow.id);
+              meetingId = existingRow.id;
+            }
+          } else {
+            console.error(`${LOG} insert error:`, insertErr.message);
+            continue;
+          }
+        } else {
+          meetingId = inserted?.id ?? null;
+          itemsNew++;
+          console.log(`${LOG} ✓ stored: ${fullTitle} (${date})`);
+        }
+      } else {
+        // Existing meeting — refresh content_hash + agenda_url in case the
+        // event page evolved (new minutes posted, etc.).
+        await supabase
+          .from('meetings')
+          .update({
+            content_hash: contentHash,
+            agenda_url: sourceUrl,
+            needs_ocr: stats.scannedPdfs!.length > 0,
+          })
+          .eq('id', meetingId);
       }
 
-      itemsNew++;
-      console.log(`${LOG} ✓ stored: ${fullTitle} (${date})`);
-
-      const { data: newRow } = await supabase
-        .from('meetings')
-        .select('id')
-        .eq('source_id', sourceId)
-        .eq('content_hash', contentHash)
-        .single();
-
-      if (newRow?.id && !needsOcr) {
-        await persistExtractedItems(supabase, newRow.id, fullTitle, agendaText);
+      if (meetingId) {
+        await persistExtractedItems(
+          supabase,
+          meetingId,
+          `${meetingTitlePrefix} — ${title}`,
+          agendaText,
+          stats,
+        );
       }
     }
 
@@ -231,6 +281,8 @@ async function collectMeetingUrls(
   log: string,
 ): Promise<void> {
   console.log(`${log} scanning listing: ${listingUrl}`);
+  // Bumped from 20 in origin's #23 fix — sf.gov listings are long enough
+  // that 20 pages dropped older meetings.
   const MAX_PAGES = 50;
 
   for (let pageNum = 0; pageNum < MAX_PAGES; pageNum++) {
@@ -277,18 +329,28 @@ async function gatherTextFromLink(
   url: string,
   maxChars: number,
   log: string,
+  stats: GatherStats,
 ): Promise<{ text: string }> {
   if (url.toLowerCase().endsWith('.pdf') || url.includes('View.ashx')) {
-    try {
-      const { bytes } = await fetchBytes(url);
-      const r = await extractPdfText(bytes);
-      return { text: r.text.slice(0, maxChars) };
-    } catch (err) {
-      console.warn(`${log} PDF fetch failed ${url}:`, err instanceof Error ? err.message : err);
+    stats.expectedPdfCount = (stats.expectedPdfCount ?? 0) + 1;
+    const r = await fetchBytes(url);
+    if (!r.ok) {
+      stats.fetchWarnings!.push(`${url}: ${r.message}`);
+      console.warn(`${log} PDF fetch failed ${url}: ${r.message}`);
       return { text: '' };
     }
+    stats.fetchedPdfCount = (stats.fetchedPdfCount ?? 0) + 1;
+    const parsed = await extractPdfText(r.bytes);
+    if (parsed.needsOcr || !parsed.text) {
+      // Save bytes for Gemini multimodal fallback.
+      const label = url.split('/').pop() ?? url;
+      stats.scannedPdfs!.push({ label, bytes: r.bytes });
+      stats.fetchWarnings!.push(`${url}: scanned/OCR-only PDF (${r.bytes.length} bytes)`);
+    }
+    return { text: parsed.text.slice(0, maxChars) };
   }
 
+  // /resource/ or sf.gov page — visit it, then download each linked PDF.
   try {
     await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
     const html = await page.content();
@@ -300,30 +362,41 @@ async function gatherTextFromLink(
         ...new Set(
           Array.from(document.querySelectorAll('a[href]'))
             .map((a) => (a as HTMLAnchorElement).href)
-            .filter((h) => h.toLowerCase().endsWith('.pdf')),
+            .filter((h) => h.toLowerCase().endsWith('.pdf') || h.includes('View.ashx')),
         ),
       ],
     );
 
-    for (const pdfUrl of pdfLinks.slice(0, 8)) {
+    stats.expectedPdfCount = (stats.expectedPdfCount ?? 0) + pdfLinks.length;
+
+    for (const pdfUrl of pdfLinks.slice(0, 12)) {
       if (totalLen >= maxChars) break;
-      try {
-        const { bytes } = await fetchBytes(pdfUrl);
-        const r = await extractPdfText(bytes);
-        if (r.text) {
-          const label = pdfUrl.split('/').pop() ?? pdfUrl;
-          const block = `\n--- ${label} ---\n${r.text.slice(0, MAX_TEXT_PER_PDF)}`;
-          parts.push(block);
-          totalLen += block.length;
-        }
-      } catch (err) {
-        console.warn(`${log} PDF parse failed ${pdfUrl}:`, err instanceof Error ? err.message : err);
+      const r = await fetchBytes(pdfUrl);
+      if (!r.ok) {
+        stats.fetchWarnings!.push(`${pdfUrl}: ${r.message}`);
+        console.warn(`${log} PDF fetch failed ${pdfUrl}: ${r.message}`);
+        continue;
+      }
+      stats.fetchedPdfCount = (stats.fetchedPdfCount ?? 0) + 1;
+      const parsed = await extractPdfText(r.bytes);
+      if (parsed.needsOcr || !parsed.text) {
+        const label = pdfUrl.split('/').pop() ?? pdfUrl;
+        stats.scannedPdfs!.push({ label, bytes: r.bytes });
+        stats.fetchWarnings!.push(`${pdfUrl}: scanned/OCR-only PDF`);
+      }
+      if (parsed.text) {
+        const label = pdfUrl.split('/').pop() ?? pdfUrl;
+        const block = `\n--- ${label} ---\n${parsed.text.slice(0, MAX_TEXT_PER_PDF)}`;
+        parts.push(block);
+        totalLen += block.length;
       }
     }
 
     return { text: parts.join('\n').slice(0, maxChars) };
   } catch (err) {
-    console.warn(`${log} page fetch failed ${url}:`, err instanceof Error ? err.message : err);
+    const msg = err instanceof Error ? err.message : String(err);
+    stats.fetchWarnings!.push(`${url}: ${msg}`);
+    console.warn(`${log} page fetch failed ${url}: ${msg}`);
     return { text: '' };
   }
 }

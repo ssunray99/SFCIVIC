@@ -4,7 +4,11 @@ import { sha256 } from '../lib/hash.ts';
 import { extractPdfText } from '../lib/pdf.ts';
 import { uploadRaw } from '../lib/storage.ts';
 import { htmlToText } from '../lib/llm.ts';
-import { persistExtractedItems } from '../lib/extract-pipeline.ts';
+import {
+  persistExtractedItems,
+  checkMeetingFreshness,
+  type GatherStats,
+} from '../lib/extract-pipeline.ts';
 import { createAdminClient } from '@/lib/supabase/admin.ts';
 
 const SOURCE_ID = 'planning';
@@ -15,11 +19,12 @@ const NOTICES_URL = 'https://sfplanning.org/permit/notices-legislative-amendment
 // inserting each event (skip if meeting_date is before Jan 1 of this year).
 const SCRAPE_FROM = `${new Date().getFullYear()}-01-01`;
 
-// Per-meeting text budget when feeding the LLM.
+// Per-meeting text budget. Caps lifted in v4 since Gemini 2.5 Flash has a
+// 1M-token window, so we can keep substantially more raw context.
 const MAX_PDFS_PER_RESOURCE = 12;
-const MAX_TEXT_PER_PDF = 20_000;
-const MAX_TEXT_PER_RESOURCE = 80_000;
-const MAX_TEXT_TOTAL = 120_000;
+const MAX_TEXT_PER_PDF = 100_000;
+const MAX_TEXT_PER_RESOURCE = 400_000;
+const MAX_TEXT_TOTAL = 500_000;
 
 export async function scrape(): Promise<void> {
   const supabase = createAdminClient();
@@ -47,16 +52,12 @@ export async function scrape(): Promise<void> {
 
     await page.goto(GRID_URL, { waitUntil: 'networkidle', timeout: 45_000 });
 
-    // Switch the timing filter to "all" and sort to descending, then Apply.
-    // If the selects aren't found the page stays in its default state and we
-    // fall back to upcoming-only behaviour — no harm done.
     const filterApplied = await page.evaluate((): boolean => {
       let changed = false;
 
       for (const sel of Array.from(document.querySelectorAll('select'))) {
         const opts = Array.from(sel.options);
 
-        // Timing filter: switch from "Upcoming Hearings" to "- Any -" / "All"
         if (opts.some((o) => /upcoming/i.test(o.text))) {
           const any =
             opts.find((o) => /any/i.test(o.text)) ??
@@ -69,8 +70,6 @@ export async function scrape(): Promise<void> {
           }
         }
 
-        // Sort filter: switch from "Ascending" to "Descending" so newest
-        // events come first and we can stop once the year rolls back.
         if (opts.some((o) => /ascending/i.test(o.text))) {
           const desc = opts.find((o) => /descending/i.test(o.text));
           if (desc && desc.value !== sel.value) {
@@ -85,7 +84,6 @@ export async function scrape(): Promise<void> {
     });
 
     if (filterApplied) {
-      // Click the Apply/APPLY button and wait for the filtered results.
       await Promise.all([
         page.waitForLoadState('networkidle', { timeout: 45_000 }),
         page.click(
@@ -100,14 +98,8 @@ export async function scrape(): Promise<void> {
     }
 
     // Capture the base URL once here — before any page= param is added.
-    // We must NOT re-read page.url() inside the loop or the page= params
-    // accumulate with each iteration.
     const baseGridUrl = page.url();
 
-    // Paginate through the (now filtered + sorted) grid. Since the sort is
-    // descending, newest meetings are first. Stop once a page shows no
-    // "Month YYYY" group headers from the target year — that means we've
-    // scrolled past the Jan 1 boundary into the prior year.
     const scrapeYear = Number(SCRAPE_FROM.slice(0, 4));
     const monthNames = [
       'January','February','March','April','May','June',
@@ -140,9 +132,6 @@ export async function scrape(): Promise<void> {
 
       if (added === 0) break;
 
-      // Stop when the grid page no longer contains a "Month YYYY" heading for
-      // the target year. Bare year numbers (copyright, etc.) are intentionally
-      // excluded — only the group headers like "January 2026" count.
       const hasTargetYear = await page.evaluate(
         ({ year, months }: { year: number; months: string[] }) =>
           months.some((m) => document.body.innerText.includes(`${m} ${year}`)),
@@ -187,8 +176,6 @@ export async function scrape(): Promise<void> {
         return null;
       });
 
-      // Skip meetings outside the target year — may appear on the last
-      // paginated grid page which can straddle the year boundary.
       if (meetingDate && meetingDate < SCRAPE_FROM) {
         console.log(`[planning] skipping pre-${SCRAPE_FROM} meeting (${meetingDate})`);
         continue;
@@ -200,9 +187,9 @@ export async function scrape(): Promise<void> {
           'SF Planning Commission Hearing',
       );
 
-      // Find the AGENDA, SUPPORTING, and MINUTES buttons by their visible text.
-      // Past events expose all three. Newer events typically only have
-      // SUPPORTING until the agenda is posted ~6 days before the hearing.
+      // Section button URLs (AGENDA, SUPPORTING, MINUTES). Past events expose
+      // all three; newer events have SUPPORTING until the agenda PDF is posted
+      // ~6 days before the hearing.
       const sectionLinks = await page.evaluate((): {
         agenda: string | null;
         supporting: string | null;
@@ -213,23 +200,13 @@ export async function scrape(): Promise<void> {
           supporting: null as string | null,
           minutes: null as string | null,
         };
-        // Section buttons appear as `Agenda`, `Agenda PDF`, `Supporting`,
-        // `Minutes`, etc. — sfplanning.org started suffixing " PDF" on
-        // direct-PDF buttons in early 2026. Match each leading word
-        // case-insensitively, allowing an optional " PDF" / " (PDF)" suffix.
-        // Regexes inlined intentionally — defining a helper inside
-        // page.evaluate trips tsx/esbuild's __name wrapper which is
-        // undefined in the page context.
         for (const a of Array.from(document.querySelectorAll('a[href]'))) {
           const href = (a as HTMLAnchorElement).href;
           const text = (a.textContent ?? '').trim();
-          // Skip buttons whose href is a placeholder like "INSERTLINK" — the
-          // page sometimes ships a Minutes button before the file is ready.
           if (!href || /INSERTLINK/i.test(href)) continue;
           if (!out.agenda && /^agenda(\s*\(?pdf\)?)?$/i.test(text)) out.agenda = href;
           else if (!out.supporting && /^supporting(\s*\(?pdf\)?)?$/i.test(text)) out.supporting = href;
           else if (!out.minutes && /^minutes(\s*\(?pdf\)?)?$/i.test(text)) out.minutes = href;
-          // Fallback URL pattern for the SUPPORTING packet
           if (!out.supporting && href.includes('/resource/planning-commission-hearing-packet-')) {
             out.supporting = href;
           }
@@ -240,57 +217,72 @@ export async function scrape(): Promise<void> {
       // Snapshot event HTML now — page navigates away when we follow links.
       const eventHtml = await page.content();
 
-      // Decide what to feed the LLM based on whether the meeting has happened:
-      //   Past   → AGENDA + MINUTES (what was planned + what was decided).
-      //            Skip SUPPORTING — the staff reports are bulky and largely
-      //            redundant once minutes exist.
-      //   Future → AGENDA if posted (canonical), else SUPPORTING (packet for
-      //            enrichment until the agenda PDF goes up ~6 days before).
       const today = new Date().toISOString().slice(0, 10);
       const isPast = !!meetingDate && meetingDate < today;
 
+      const bytes = Buffer.from(eventHtml);
+      const contentHash = sha256(bytes);
+      const externalId = eventUrl.split('/').pop()?.split('?')[0] ?? null;
+
+      // Idempotency probe — skip iff this event-page HTML was already
+      // extracted under v4 with status=success.
+      const freshness = await checkMeetingFreshness(supabase, SOURCE_ID, contentHash);
+      if (freshness.fresh) {
+        console.log(`[planning] already stored + extracted, skipping`);
+        continue;
+      }
+      if (freshness.existingId) {
+        console.log(`[planning] re-extracting existing meeting (status=${freshness.status})`);
+      }
+
+      // v4: feed the LLM as much context as we can. With Gemini's 1M window
+      // and OCR-free multimodal fallback, the v3-era trade of "skip SUPPORTING
+      // for past meetings because it's bulky and redundant with minutes" is
+      // no longer worth it — the staff reports add detail that the minutes
+      // alone don't capture.
+      //   Past   → AGENDA + MINUTES + SUPPORTING
+      //   Future → AGENDA if posted, else SUPPORTING (packet)
+      const stats: GatherStats = {
+        scannedPdfs: [],
+        fetchWarnings: [],
+        expectedPdfCount: 0,
+        fetchedPdfCount: 0,
+      };
       let agendaText = '';
-      let needsOcr = false;
-      let usedAnyPdf = false;
-      let totalPdfsLinked = 0;
 
       if (isPast) {
         if (sectionLinks.agenda) {
           console.log(`[planning] (past) agenda link: ${sectionLinks.agenda}`);
-          const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_PER_RESOURCE);
+          const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_PER_RESOURCE, stats);
           agendaText += r.text;
-          usedAnyPdf ||= r.pdfsWithText > 0;
-          totalPdfsLinked += r.pdfsLinked;
         }
         if (sectionLinks.minutes && agendaText.length < MAX_TEXT_TOTAL) {
           console.log(`[planning] (past) minutes link: ${sectionLinks.minutes}`);
           const remaining = MAX_TEXT_TOTAL - agendaText.length;
           const budget = Math.min(MAX_TEXT_PER_RESOURCE, remaining);
-          const r = await gatherTextFromLink(page, sectionLinks.minutes, budget);
+          const r = await gatherTextFromLink(page, sectionLinks.minutes, budget, stats);
           if (r.text) agendaText += `\n\n======== MINUTES ========\n\n${r.text}`;
-          usedAnyPdf ||= r.pdfsWithText > 0;
-          totalPdfsLinked += r.pdfsLinked;
+        }
+        if (sectionLinks.supporting && agendaText.length < MAX_TEXT_TOTAL) {
+          console.log(`[planning] (past) supporting link: ${sectionLinks.supporting}`);
+          const remaining = MAX_TEXT_TOTAL - agendaText.length;
+          const budget = Math.min(MAX_TEXT_PER_RESOURCE, remaining);
+          const r = await gatherTextFromLink(page, sectionLinks.supporting, budget, stats);
+          if (r.text) agendaText += `\n\n======== SUPPORTING / STAFF REPORTS ========\n\n${r.text}`;
         }
       } else {
         if (sectionLinks.agenda) {
           console.log(`[planning] (future) agenda link: ${sectionLinks.agenda}`);
-          const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_TOTAL);
+          const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_TOTAL, stats);
           agendaText += r.text;
-          usedAnyPdf ||= r.pdfsWithText > 0;
-          totalPdfsLinked += r.pdfsLinked;
         } else if (sectionLinks.supporting) {
           console.log(`[planning] (future) supporting link: ${sectionLinks.supporting}`);
-          const r = await gatherTextFromLink(page, sectionLinks.supporting, MAX_TEXT_TOTAL);
+          const r = await gatherTextFromLink(page, sectionLinks.supporting, MAX_TEXT_TOTAL, stats);
           agendaText += r.text;
-          usedAnyPdf ||= r.pdfsWithText > 0;
-          totalPdfsLinked += r.pdfsLinked;
         }
       }
 
-      // Fall back to event-page text if we found nothing usable.
-      if (!agendaText.trim()) {
-        agendaText = htmlToText(eventHtml);
-      }
+      if (!agendaText.trim()) agendaText = htmlToText(eventHtml);
 
       // Append legislative amendment notice for this date, if one exists.
       if (meetingDate) {
@@ -301,120 +293,84 @@ export async function scrape(): Promise<void> {
         }
       }
 
-      const textLength = agendaText.length;
       agendaText = agendaText.slice(0, MAX_TEXT_TOTAL);
 
-      // Only skip LLM if there is truly nothing useful to send — i.e. the
-      // final text is shorter than the minimum the LLM requires (200 chars).
-      // PDF parse failures alone are not enough reason to block: the packet
-      // HTML often has case titles and descriptions worth extracting.
-      if (!usedAnyPdf && totalPdfsLinked > 0) {
-        console.warn(`[planning] all ${totalPdfsLinked} PDF(s) failed to parse — LLM will use HTML text only`);
-      }
-      needsOcr = agendaText.trim().length < 200;
-
-      // Store the event page HTML as the canonical raw artefact. It is the
-      // single stable URL for a meeting and contains links to every PDF.
-      const bytes = Buffer.from(eventHtml);
-      const mime = 'text/html' as const;
-
-      // Pick the human-facing link shown as "Original agenda" in the UI.
-      //  - Past meetings: event page (has all 3 buttons: AGENDA, SUPPORTING, MINUTES)
-      //  - Future meetings: prefer AGENDA, fall back to SUPPORTING, then event page
       const sourceUrl = isPast
         ? eventUrl
         : (sectionLinks.agenda ?? sectionLinks.supporting ?? eventUrl);
-      const contentHash = sha256(bytes);
-
-      if (needsOcr) console.warn(`[planning] needs OCR: ${eventUrl}`);
-
-      // Idempotency check
-      const { data: existing } = await supabase
-        .from('meetings')
-        .select('id')
-        .eq('source_id', SOURCE_ID)
-        .eq('content_hash', contentHash)
-        .maybeSingle();
-
-      if (existing) {
-        console.log(`[planning] already stored, skipping`);
-        continue;
-      }
-
-      let rawStoragePath: string | null = null;
-      try {
-        rawStoragePath = await uploadRaw({ sourceId: SOURCE_ID, contentHash, bytes, mime });
-      } catch (err) {
-        console.warn(`[planning] storage upload failed, continuing:`, err);
-      }
-
       const date = meetingDate ?? new Date().toISOString().slice(0, 10);
-      // Strip query string so the slug is stable regardless of UTM params etc.
-      const externalId = eventUrl.split('/').pop()?.split('?')[0] ?? null;
+      const fullTitle = `SF Planning Commission — ${title}`;
 
-      const { data: inserted, error: insertErr } = await supabase.from('meetings').insert({
-        source_id: SOURCE_ID,
-        external_id: externalId,
-        title: `SF Planning Commission — ${title}`,
-        meeting_date: date,
-        agenda_url: sourceUrl,
-        raw_storage_path: rawStoragePath,
-        content_hash: contentHash,
-        needs_ocr: needsOcr,
-        text_length: textLength,
-      }).select('id').single();
+      let meetingId: string | null = freshness.existingId;
 
-      if (insertErr) {
-        if (insertErr.code === '23505') {
-          // The event page HTML changed (e.g. minutes posted, agenda PDF added)
-          // so the hash differs, but the row already exists by external_id.
-          // Update the row with the new hash and re-run LLM if no items yet.
-          console.log(`[planning] content changed for ${externalId}, updating row`);
-          const { data: existingRow } = await supabase
-            .from('meetings')
-            .select('id, needs_ocr')
-            .eq('source_id', SOURCE_ID)
-            .eq('external_id', externalId)
-            .maybeSingle();
+      if (!meetingId) {
+        let rawStoragePath: string | null = null;
+        try {
+          rawStoragePath = await uploadRaw({ sourceId: SOURCE_ID, contentHash, bytes, mime: 'text/html' });
+        } catch (err) {
+          console.warn(`[planning] storage upload failed, continuing:`, err);
+        }
 
-          if (existingRow) {
-            await supabase
+        const { data: inserted, error: insertErr } = await supabase
+          .from('meetings')
+          .insert({
+            source_id: SOURCE_ID,
+            external_id: externalId,
+            title: fullTitle,
+            meeting_date: date,
+            agenda_url: sourceUrl,
+            raw_storage_path: rawStoragePath,
+            content_hash: contentHash,
+            needs_ocr: stats.scannedPdfs!.length > 0,
+          })
+          .select('id')
+          .single();
+
+        if (insertErr) {
+          if (insertErr.code === '23505') {
+            // (source_id, external_id) collision — content evolved since the
+            // original scrape. Update the row in place and re-extract.
+            console.log(`[planning] content changed for ${externalId}, updating row`);
+            const { data: existingRow } = await supabase
               .from('meetings')
-              .update({
-                content_hash: contentHash,
-                raw_storage_path: rawStoragePath,
-                needs_ocr: needsOcr,
-                agenda_url: sourceUrl,
-                text_length: textLength,
-              })
-              .eq('id', existingRow.id);
-
-            if (!needsOcr) {
-              const { count } = await supabase
-                .from('agenda_items')
-                .select('id', { count: 'exact', head: true })
-                .eq('meeting_id', existingRow.id);
-
-              if ((count ?? 0) === 0) {
-                console.log(`[planning] re-running LLM for updated meeting ${existingRow.id}`);
-                await runLlmExtraction(supabase, existingRow.id, `SF Planning Commission — ${title}`, agendaText);
-              } else {
-                console.log(`[planning] meeting ${existingRow.id} already has ${count} item(s), skipping LLM`);
-              }
+              .select('id')
+              .eq('source_id', SOURCE_ID)
+              .eq('external_id', externalId)
+              .maybeSingle();
+            if (existingRow) {
+              await supabase
+                .from('meetings')
+                .update({
+                  content_hash: contentHash,
+                  raw_storage_path: rawStoragePath,
+                  needs_ocr: stats.scannedPdfs!.length > 0,
+                  agenda_url: sourceUrl,
+                })
+                .eq('id', existingRow.id);
+              meetingId = existingRow.id;
             }
+          } else {
+            console.error(`[planning] insert error:`, insertErr.message);
+            continue;
           }
         } else {
-          console.error(`[planning] insert error:`, insertErr.message);
+          meetingId = inserted?.id ?? null;
+          itemsNew++;
+          console.log(`[planning] ✓ stored: ${title} (${date})`);
         }
-        continue;
+      } else {
+        await supabase
+          .from('meetings')
+          .update({
+            content_hash: contentHash,
+            agenda_url: sourceUrl,
+            needs_ocr: stats.scannedPdfs!.length > 0,
+          })
+          .eq('id', meetingId);
       }
 
-      itemsNew++;
-      console.log(`[planning] ✓ stored: ${title} (${date})`);
-
-      const meetingId = inserted?.id ?? null;
-      if (meetingId && !needsOcr) {
-        await runLlmExtraction(supabase, meetingId, `SF Planning Commission — ${title}`, agendaText);
+      if (meetingId) {
+        await persistExtractedItems(supabase, meetingId, fullTitle, agendaText, stats);
       }
     }
 
@@ -444,34 +400,36 @@ export async function scrape(): Promise<void> {
 /**
  * Fetch text from a planning.org link, which may be either:
  *   - a direct PDF (downloaded + parsed), or
- *   - a /resource/ HTML page that lists multiple PDF children (visited, then
- *     each linked PDF is downloaded + parsed and concatenated).
+ *   - a /resource/ HTML page that lists multiple PDF children.
  *
- * Returns the gathered text plus stats so the caller can flag needs_ocr when
- * a meeting linked PDFs but none yielded extractable text.
+ * Updates `stats` with per-PDF outcomes: scannedPdfs (bytes for multimodal
+ * fallback), fetchWarnings, and expected/fetched counts.
  */
 async function gatherTextFromLink(
   page: Page,
   url: string,
   maxChars: number,
-): Promise<{ text: string; pdfsLinked: number; pdfsWithText: number }> {
+  stats: GatherStats,
+): Promise<{ text: string }> {
   if (url.toLowerCase().endsWith('.pdf')) {
-    try {
-      const { bytes } = await fetchBytes(url);
-      const r = await extractPdfText(bytes);
-      const trimmed = r.text.slice(0, maxChars);
-      return {
-        text: trimmed,
-        pdfsLinked: 1,
-        pdfsWithText: trimmed.length > 0 ? 1 : 0,
-      };
-    } catch (err) {
-      console.warn(`[planning] PDF fetch failed ${url}:`, err instanceof Error ? err.message : err);
-      return { text: '', pdfsLinked: 1, pdfsWithText: 0 };
+    stats.expectedPdfCount = (stats.expectedPdfCount ?? 0) + 1;
+    const r = await fetchBytes(url);
+    if (!r.ok) {
+      stats.fetchWarnings!.push(`${url}: ${r.message}`);
+      console.warn(`[planning] PDF fetch failed ${url}: ${r.message}`);
+      return { text: '' };
     }
+    stats.fetchedPdfCount = (stats.fetchedPdfCount ?? 0) + 1;
+    const parsed = await extractPdfText(r.bytes);
+    if (parsed.needsOcr || !parsed.text) {
+      const label = url.split('/').pop() ?? url;
+      stats.scannedPdfs!.push({ label, bytes: r.bytes });
+      stats.fetchWarnings!.push(`${url}: scanned/OCR-only PDF (${r.bytes.length} bytes)`);
+    }
+    return { text: parsed.text.slice(0, maxChars) };
   }
 
-  // /resource/ page — visit it, then download each linked PDF
+  // /resource/ page — visit it, then download each linked PDF.
   try {
     await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
     const html = await page.content();
@@ -486,67 +444,63 @@ async function gatherTextFromLink(
     );
     console.log(`[planning] ${url} → ${pdfLinks.length} PDF(s)`);
 
+    stats.expectedPdfCount = (stats.expectedPdfCount ?? 0) + pdfLinks.length;
+
     const parts: string[] = [htmlToText(html)];
     let totalLen = parts[0].length;
-    let pdfsWithText = 0;
 
     for (const linkedPdf of pdfLinks.slice(0, MAX_PDFS_PER_RESOURCE)) {
       if (totalLen >= maxChars) break;
-      try {
-        const { bytes } = await fetchBytes(linkedPdf);
-        const r = await extractPdfText(bytes);
-        if (r.text) {
-          pdfsWithText++;
-          const label = linkedPdf.split('/').pop() ?? linkedPdf;
-          const block = `\n--- ${label} ---\n${r.text.slice(0, MAX_TEXT_PER_PDF)}`;
-          parts.push(block);
-          totalLen += block.length;
-        }
-      } catch (err) {
-        console.warn(`[planning] PDF fetch/parse failed ${linkedPdf}:`, err instanceof Error ? err.message : err);
+      const r = await fetchBytes(linkedPdf);
+      if (!r.ok) {
+        stats.fetchWarnings!.push(`${linkedPdf}: ${r.message}`);
+        console.warn(`[planning] PDF fetch failed ${linkedPdf}: ${r.message}`);
+        continue;
+      }
+      stats.fetchedPdfCount = (stats.fetchedPdfCount ?? 0) + 1;
+      const parsed = await extractPdfText(r.bytes);
+      if (parsed.needsOcr || !parsed.text) {
+        const label = linkedPdf.split('/').pop() ?? linkedPdf;
+        stats.scannedPdfs!.push({ label, bytes: r.bytes });
+        stats.fetchWarnings!.push(`${linkedPdf}: scanned/OCR-only PDF`);
+      }
+      if (parsed.text) {
+        const label = linkedPdf.split('/').pop() ?? linkedPdf;
+        const block = `\n--- ${label} ---\n${parsed.text.slice(0, MAX_TEXT_PER_PDF)}`;
+        parts.push(block);
+        totalLen += block.length;
       }
     }
 
-    return {
-      text: parts.join('\n').slice(0, maxChars),
-      pdfsLinked: pdfLinks.length,
-      pdfsWithText,
-    };
+    return { text: parts.join('\n').slice(0, maxChars) };
   } catch (err) {
-    console.warn(`[planning] resource page fetch failed ${url}:`, err instanceof Error ? err.message : err);
-    return { text: '', pdfsLinked: 0, pdfsWithText: 0 };
+    const msg = err instanceof Error ? err.message : String(err);
+    stats.fetchWarnings!.push(`${url}: ${msg}`);
+    console.warn(`[planning] resource page fetch failed ${url}: ${msg}`);
+    return { text: '' };
   }
 }
 
 /**
- * Re-run LLM extraction on all Planning Commission meetings that have no
- * agenda_items yet and aren't flagged needs_ocr. Reads the stored event-page
- * HTML from Storage — note this only contains links, not PDF content, so
- * re-extraction of older rows produces weaker results than a fresh scrape.
+ * Re-run LLM extraction on Planning meetings with extraction_status not in
+ * ('success'). Reads stored event-page HTML from Storage — note this only
+ * contains links, not PDF content, so re-extraction of older rows produces
+ * weaker results than a fresh scrape.
  */
 export async function extractExisting(): Promise<void> {
   const supabase = createAdminClient();
 
   const { data: meetings, error } = await supabase
     .from('meetings')
-    .select('id, title, raw_storage_path, needs_ocr')
+    .select('id, title, raw_storage_path, extraction_status')
     .eq('source_id', SOURCE_ID)
-    .eq('needs_ocr', false);
+    .neq('extraction_status', 'success');
 
   if (error) throw error;
 
-  const unprocessed: typeof meetings = [];
-  for (const m of meetings ?? []) {
-    const { count } = await supabase
-      .from('agenda_items')
-      .select('id', { count: 'exact', head: true })
-      .eq('meeting_id', m.id);
-    if ((count ?? 0) === 0) unprocessed.push(m);
-  }
+  console.log(`[planning:extract] ${meetings?.length ?? 0} meeting(s) to process`);
 
-  console.log(`[planning:extract] ${unprocessed.length} meeting(s) to process`);
-
-  for (const meeting of unprocessed) {
+  for (const meeting of meetings ?? []) {
     if (!meeting.raw_storage_path) {
       console.log(`[planning:extract] no storage path for ${meeting.id}, skipping`);
       continue;
@@ -567,7 +521,7 @@ export async function extractExisting(): Promise<void> {
       ? htmlToText(bytes.toString('utf8'))
       : (await extractPdfText(bytes)).text;
 
-    await runLlmExtraction(supabase, meeting.id, meeting.title, agendaText);
+    await persistExtractedItems(supabase, meeting.id, meeting.title, agendaText);
   }
 
   console.log(`[planning:extract] done`);
@@ -582,7 +536,6 @@ async function fetchLegislativeNotices(page: Page): Promise<Map<string, string>>
   try {
     await page.goto(NOTICES_URL, { waitUntil: 'networkidle', timeout: 45_000 });
 
-    // Use full body text split by date lines — avoids fragile DOM sibling traversal.
     const bodyText = await page.evaluate((): string => document.body.innerText);
 
     const monthRe = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b/i;
@@ -613,13 +566,4 @@ async function fetchLegislativeNotices(page: Page): Promise<Map<string, string>>
     console.warn('[planning] failed to fetch legislative notices, continuing without them:', err instanceof Error ? err.message : err);
   }
   return map;
-}
-
-async function runLlmExtraction(
-  supabase: ReturnType<typeof createAdminClient>,
-  meetingId: string,
-  meetingTitle: string,
-  agendaText: string,
-): Promise<void> {
-  await persistExtractedItems(supabase, meetingId, meetingTitle, agendaText);
 }

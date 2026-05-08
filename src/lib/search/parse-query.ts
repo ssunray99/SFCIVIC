@@ -2,13 +2,12 @@
 // /ask (LLM-synthesized answer with citations).
 //
 // Takes a free-form prompt like "housing in District 5 next month" and uses
-// Claude Haiku 4.5 with forced tool-use to map it onto closed enums + a date
-// range. Reuses the same SDK patterns as scraper/lib/llm.ts: prompt caching
-// on system + tool schema, forced tool_choice, enum validation.
+// Gemini 2.5 Flash with forced function-calling to map it onto closed enums
+// + a date range. Same surface as scraper/lib/llm.ts.
 //
-// Server-only. Reads ANTHROPIC_API_KEY (NOT NEXT_PUBLIC_*).
+// Server-only. Reads GEMINI_API_KEY (NOT NEXT_PUBLIC_*).
 
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenAI, FunctionCallingConfigMode } from '@google/genai';
 import {
   NEIGHBORHOODS,
   TOPICS,
@@ -20,15 +19,15 @@ import {
   type SourceId,
 } from '@/lib/constants';
 
-const MODEL = 'claude-haiku-4-5-20251001';
+const MODEL = 'gemini-2.5-flash';
 const TOOL_NAME = 'parse_search_query';
 
-let _client: Anthropic | null = null;
-function getClient(): Anthropic {
+let _client: GoogleGenAI | null = null;
+function getClient(): GoogleGenAI {
   if (!_client) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
-    _client = new Anthropic({ apiKey });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
+    _client = new GoogleGenAI({ apiKey });
   }
   return _client;
 }
@@ -76,43 +75,49 @@ Rules:
 - If the query is gibberish or matches nothing, return all-null/empty fields with
   the original query as keywords.`;
 
+// Gemini-native schema (OpenAPI-3.0 subset). Uppercase Type strings, `nullable`
+// instead of nullable union types.
 const TOOL_SCHEMA = {
-  type: 'object' as const,
+  type: 'OBJECT',
+  required: ['topics', 'neighborhoods', 'district', 'source', 'dateFrom', 'dateTo', 'keywords'],
   properties: {
     topics: {
-      type: 'array' as const,
-      items: { type: 'string' as const, enum: [...TOPICS] },
+      type: 'ARRAY',
+      items: { type: 'STRING', enum: [...TOPICS] },
       description: 'Topics that match the query. Empty array if none.',
     },
     neighborhoods: {
-      type: 'array' as const,
-      items: { type: 'string' as const, enum: [...NEIGHBORHOODS] },
+      type: 'ARRAY',
+      items: { type: 'STRING', enum: [...NEIGHBORHOODS] },
       description: 'Neighborhoods named or implied by the query.',
     },
     district: {
-      type: ['integer', 'null'] as const,
+      type: 'INTEGER',
+      nullable: true,
       description: 'Supervisor district 1–11, or null if not mentioned.',
     },
     source: {
-      type: ['string', 'null'] as const,
-      enum: [...SOURCES.map((s) => s.id), null],
+      type: 'STRING',
+      nullable: true,
+      enum: SOURCES.map((s) => s.id),
       description: 'Source id (e.g. "planning", "bos-land-use"), or null.',
     },
     dateFrom: {
-      type: ['string', 'null'] as const,
+      type: 'STRING',
+      nullable: true,
       description: 'Lower-bound meeting date in YYYY-MM-DD, or null.',
     },
     dateTo: {
-      type: ['string', 'null'] as const,
+      type: 'STRING',
+      nullable: true,
       description: 'Upper-bound meeting date in YYYY-MM-DD, or null.',
     },
     keywords: {
-      type: 'string' as const,
+      type: 'STRING',
       description: 'Free-text leftover after extracting structured fields. May be empty.',
     },
   },
-  required: ['topics', 'neighborhoods', 'district', 'source', 'dateFrom', 'dateTo', 'keywords'],
-};
+} as const;
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -167,7 +172,7 @@ export class ParseError extends Error {
 }
 
 export async function parseQuery(q: string): Promise<ParsedQuery> {
-  if (!process.env.ANTHROPIC_API_KEY) {
+  if (!process.env.GEMINI_API_KEY) {
     throw new ParseError('search unavailable', 503);
   }
   const trimmed = q.trim();
@@ -178,43 +183,55 @@ export async function parseQuery(q: string): Promise<ParsedQuery> {
 
   let response;
   try {
-    response = await getClient().messages.create({
+    response = await getClient().models.generateContent({
       model: MODEL,
-      max_tokens: 1024,
-      system: [
-        {
-          type: 'text',
-          text: SYSTEM_PROMPT,
-          cache_control: { type: 'ephemeral' },
-        },
-      ],
-      tools: [
-        {
-          name: TOOL_NAME,
-          description: 'Record the structured filters parsed from the user query.',
-          input_schema: TOOL_SCHEMA,
-          cache_control: { type: 'ephemeral' },
-        },
-      ],
-      tool_choice: { type: 'tool', name: TOOL_NAME },
-      messages: [
+      contents: [
         {
           role: 'user',
-          content: `Today's date is ${today}.\n\nUser query: ${trimmed}`,
+          parts: [{ text: `Today's date is ${today}.\n\nUser query: ${trimmed}` }],
         },
       ],
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        temperature: 0,
+        maxOutputTokens: 1024,
+        tools: [
+          {
+            functionDeclarations: [
+              {
+                name: TOOL_NAME,
+                description: 'Record the structured filters parsed from the user query.',
+                parameters: TOOL_SCHEMA as unknown as Record<string, unknown>,
+              },
+            ],
+          },
+        ],
+        toolConfig: {
+          functionCallingConfig: {
+            mode: FunctionCallingConfigMode.ANY,
+            allowedFunctionNames: [TOOL_NAME],
+          },
+        },
+      },
     });
   } catch (err) {
-    console.error('[parse-query] anthropic call failed:', err instanceof Error ? err.message : err);
+    console.error('[parse-query] gemini call failed:', err instanceof Error ? err.message : err);
     throw new ParseError('parse failed', 502);
   }
 
-  const toolBlock = response.content.find((b) => b.type === 'tool_use');
-  if (!toolBlock || toolBlock.type !== 'tool_use') {
-    throw new ParseError('no tool_use block in response', 502);
-  }
+  const r = response as {
+    candidates?: Array<{
+      content?: {
+        parts?: Array<{ functionCall?: { name?: string; args?: unknown } }>;
+      };
+    }>;
+  };
+  const fnCall = r.candidates?.[0]?.content?.parts?.find(
+    (p) => p.functionCall && p.functionCall.name === TOOL_NAME,
+  )?.functionCall;
+  if (!fnCall) throw new ParseError('no function-call in response', 502);
 
-  const parsed = validate(toolBlock.input);
+  const parsed = validate(fnCall.args);
   if (!parsed) throw new ParseError('invalid tool output', 502);
   return parsed;
 }

@@ -4,19 +4,27 @@ import { sha256 } from '../lib/hash.ts';
 import { extractPdfText } from '../lib/pdf.ts';
 import { uploadRaw } from '../lib/storage.ts';
 import { htmlToText } from '../lib/llm.ts';
-import { persistExtractedItems } from '../lib/extract-pipeline.ts';
+import {
+  persistExtractedItems,
+  checkMeetingFreshness,
+  type GatherStats,
+} from '../lib/extract-pipeline.ts';
 import { createAdminClient } from '@/lib/supabase/admin.ts';
 
 const SOURCE_ID = 'hpc';
-const GRID_URL = 'https://sfplanning.org/hearings-historic-preservation-commission';
-// HPC events live at /event/historic-preservation-commission-* on sfplanning.org.
+// sfplanning.org renamed the HPC grid URL in 2026: the old
+// `hearings-historic-preservation-commission` slug now 404s; the canonical
+// path is `hearings-hpc` (which redirects to `hearings-hpc-grid`). The event
+// URL pattern itself is unchanged — `/event/historic-preservation-commission-NNN`.
+const GRID_URL = 'https://sfplanning.org/hearings-hpc';
 const EVENT_URL_FRAGMENT = '/event/historic-preservation-commission';
 const SCRAPE_FROM = `${new Date().getFullYear()}-01-01`;
 
+// Caps lifted in v4 (Gemini 1M-token window).
 const MAX_PDFS_PER_RESOURCE = 12;
-const MAX_TEXT_PER_PDF = 20_000;
-const MAX_TEXT_PER_RESOURCE = 80_000;
-const MAX_TEXT_TOTAL = 120_000;
+const MAX_TEXT_PER_PDF = 100_000;
+const MAX_TEXT_PER_RESOURCE = 400_000;
+const MAX_TEXT_TOTAL = 500_000;
 
 export async function scrape(): Promise<void> {
   const supabase = createAdminClient();
@@ -85,8 +93,6 @@ export async function scrape(): Promise<void> {
       console.warn('[hpc] could not switch grid filter — using upcoming-only default');
     }
 
-    // Capture base URL before any page= param is added; re-reading inside the
-    // loop accumulates page= params with each iteration.
     const baseGridUrl = page.url();
 
     const scrapeYear = Number(SCRAPE_FROM.slice(0, 4));
@@ -184,12 +190,6 @@ export async function scrape(): Promise<void> {
           supporting: null as string | null,
           minutes: null as string | null,
         };
-        // sfplanning.org changed button labels to suffix " PDF" in early 2026
-        // (e.g. `Agenda PDF` vs the old `Agenda`). Match leading word, case-
-        // insensitively, allowing an optional " PDF" / " (PDF)" suffix.
-        // Regexes inlined intentionally — a helper function inside
-        // page.evaluate trips tsx/esbuild's __name wrapper which is
-        // undefined in the page context.
         for (const a of Array.from(document.querySelectorAll('a[href]'))) {
           const href = (a as HTMLAnchorElement).href;
           const text = (a.textContent ?? '').trim();
@@ -209,148 +209,137 @@ export async function scrape(): Promise<void> {
       const today = new Date().toISOString().slice(0, 10);
       const isPast = !!meetingDate && meetingDate < today;
 
+      const bytes = Buffer.from(eventHtml);
+      const contentHash = sha256(bytes);
+      const externalId = eventUrl.split('/').pop()?.split('?')[0] ?? null;
+
+      const freshness = await checkMeetingFreshness(supabase, SOURCE_ID, contentHash);
+      if (freshness.fresh) {
+        console.log(`[hpc] already stored + extracted, skipping`);
+        continue;
+      }
+      if (freshness.existingId) {
+        console.log(`[hpc] re-extracting existing meeting (status=${freshness.status})`);
+      }
+
+      // v4: include SUPPORTING for past meetings (see planning.ts comment).
+      const stats: GatherStats = {
+        scannedPdfs: [],
+        fetchWarnings: [],
+        expectedPdfCount: 0,
+        fetchedPdfCount: 0,
+      };
       let agendaText = '';
-      let needsOcr = false;
-      let usedAnyPdf = false;
-      let totalPdfsLinked = 0;
 
       if (isPast) {
         if (sectionLinks.agenda) {
           console.log(`[hpc] (past) agenda link: ${sectionLinks.agenda}`);
-          const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_PER_RESOURCE);
+          const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_PER_RESOURCE, stats);
           agendaText += r.text;
-          usedAnyPdf ||= r.pdfsWithText > 0;
-          totalPdfsLinked += r.pdfsLinked;
         }
         if (sectionLinks.minutes && agendaText.length < MAX_TEXT_TOTAL) {
           console.log(`[hpc] (past) minutes link: ${sectionLinks.minutes}`);
           const remaining = MAX_TEXT_TOTAL - agendaText.length;
           const budget = Math.min(MAX_TEXT_PER_RESOURCE, remaining);
-          const r = await gatherTextFromLink(page, sectionLinks.minutes, budget);
+          const r = await gatherTextFromLink(page, sectionLinks.minutes, budget, stats);
           if (r.text) agendaText += `\n\n======== MINUTES ========\n\n${r.text}`;
-          usedAnyPdf ||= r.pdfsWithText > 0;
-          totalPdfsLinked += r.pdfsLinked;
+        }
+        if (sectionLinks.supporting && agendaText.length < MAX_TEXT_TOTAL) {
+          console.log(`[hpc] (past) supporting link: ${sectionLinks.supporting}`);
+          const remaining = MAX_TEXT_TOTAL - agendaText.length;
+          const budget = Math.min(MAX_TEXT_PER_RESOURCE, remaining);
+          const r = await gatherTextFromLink(page, sectionLinks.supporting, budget, stats);
+          if (r.text) agendaText += `\n\n======== SUPPORTING / STAFF REPORTS ========\n\n${r.text}`;
         }
       } else {
         if (sectionLinks.agenda) {
           console.log(`[hpc] (future) agenda link: ${sectionLinks.agenda}`);
-          const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_TOTAL);
+          const r = await gatherTextFromLink(page, sectionLinks.agenda, MAX_TEXT_TOTAL, stats);
           agendaText += r.text;
-          usedAnyPdf ||= r.pdfsWithText > 0;
-          totalPdfsLinked += r.pdfsLinked;
         } else if (sectionLinks.supporting) {
           console.log(`[hpc] (future) supporting link: ${sectionLinks.supporting}`);
-          const r = await gatherTextFromLink(page, sectionLinks.supporting, MAX_TEXT_TOTAL);
+          const r = await gatherTextFromLink(page, sectionLinks.supporting, MAX_TEXT_TOTAL, stats);
           agendaText += r.text;
-          usedAnyPdf ||= r.pdfsWithText > 0;
-          totalPdfsLinked += r.pdfsLinked;
         }
       }
 
-      if (!agendaText.trim()) {
-        agendaText = htmlToText(eventHtml);
-      }
-
-      const textLength = agendaText.length;
+      if (!agendaText.trim()) agendaText = htmlToText(eventHtml);
       agendaText = agendaText.slice(0, MAX_TEXT_TOTAL);
-
-      if (!usedAnyPdf && totalPdfsLinked > 0) {
-        console.warn(`[hpc] all ${totalPdfsLinked} PDF(s) failed to parse — LLM will use HTML text only`);
-      }
-      needsOcr = agendaText.trim().length < 200;
-
-      const bytes = Buffer.from(eventHtml);
-      const mime = 'text/html' as const;
 
       const sourceUrl = isPast
         ? eventUrl
         : (sectionLinks.agenda ?? sectionLinks.supporting ?? eventUrl);
-      const contentHash = sha256(bytes);
-
-      if (needsOcr) console.warn(`[hpc] needs OCR: ${eventUrl}`);
-
-      const { data: existing } = await supabase
-        .from('meetings')
-        .select('id')
-        .eq('source_id', SOURCE_ID)
-        .eq('content_hash', contentHash)
-        .maybeSingle();
-
-      if (existing) {
-        console.log(`[hpc] already stored, skipping`);
-        continue;
-      }
-
-      let rawStoragePath: string | null = null;
-      try {
-        rawStoragePath = await uploadRaw({ sourceId: SOURCE_ID, contentHash, bytes, mime });
-      } catch (err) {
-        console.warn(`[hpc] storage upload failed, continuing:`, err);
-      }
-
       const date = meetingDate ?? new Date().toISOString().slice(0, 10);
-      const externalId = eventUrl.split('/').pop()?.split('?')[0] ?? null;
+      const fullTitle = `SF Historic Preservation Commission — ${title}`;
 
-      const { data: inserted, error: insertErr } = await supabase.from('meetings').insert({
-        source_id: SOURCE_ID,
-        external_id: externalId,
-        title: `SF Historic Preservation Commission — ${title}`,
-        meeting_date: date,
-        agenda_url: sourceUrl,
-        raw_storage_path: rawStoragePath,
-        content_hash: contentHash,
-        needs_ocr: needsOcr,
-        text_length: textLength,
-      }).select('id').single();
+      let meetingId: string | null = freshness.existingId;
 
-      if (insertErr) {
-        if (insertErr.code === '23505') {
-          console.log(`[hpc] content changed for ${externalId}, updating row`);
-          const { data: existingRow } = await supabase
-            .from('meetings')
-            .select('id, needs_ocr')
-            .eq('source_id', SOURCE_ID)
-            .eq('external_id', externalId)
-            .maybeSingle();
+      if (!meetingId) {
+        let rawStoragePath: string | null = null;
+        try {
+          rawStoragePath = await uploadRaw({ sourceId: SOURCE_ID, contentHash, bytes, mime: 'text/html' });
+        } catch (err) {
+          console.warn(`[hpc] storage upload failed, continuing:`, err);
+        }
 
-          if (existingRow) {
-            await supabase
+        const { data: inserted, error: insertErr } = await supabase
+          .from('meetings')
+          .insert({
+            source_id: SOURCE_ID,
+            external_id: externalId,
+            title: fullTitle,
+            meeting_date: date,
+            agenda_url: sourceUrl,
+            raw_storage_path: rawStoragePath,
+            content_hash: contentHash,
+            needs_ocr: stats.scannedPdfs!.length > 0,
+          })
+          .select('id')
+          .single();
+
+        if (insertErr) {
+          if (insertErr.code === '23505') {
+            console.log(`[hpc] content changed for ${externalId}, updating row`);
+            const { data: existingRow } = await supabase
               .from('meetings')
-              .update({
-                content_hash: contentHash,
-                raw_storage_path: rawStoragePath,
-                needs_ocr: needsOcr,
-                agenda_url: sourceUrl,
-                text_length: textLength,
-              })
-              .eq('id', existingRow.id);
-
-            if (!needsOcr) {
-              const { count } = await supabase
-                .from('agenda_items')
-                .select('id', { count: 'exact', head: true })
-                .eq('meeting_id', existingRow.id);
-
-              if ((count ?? 0) === 0) {
-                console.log(`[hpc] re-running LLM for updated meeting ${existingRow.id}`);
-                await runLlmExtraction(supabase, existingRow.id, `SF Historic Preservation Commission — ${title}`, agendaText);
-              } else {
-                console.log(`[hpc] meeting ${existingRow.id} already has ${count} item(s), skipping LLM`);
-              }
+              .select('id')
+              .eq('source_id', SOURCE_ID)
+              .eq('external_id', externalId)
+              .maybeSingle();
+            if (existingRow) {
+              await supabase
+                .from('meetings')
+                .update({
+                  content_hash: contentHash,
+                  raw_storage_path: rawStoragePath,
+                  needs_ocr: stats.scannedPdfs!.length > 0,
+                  agenda_url: sourceUrl,
+                })
+                .eq('id', existingRow.id);
+              meetingId = existingRow.id;
             }
+          } else {
+            console.error(`[hpc] insert error:`, insertErr.message);
+            continue;
           }
         } else {
-          console.error(`[hpc] insert error:`, insertErr.message);
+          meetingId = inserted?.id ?? null;
+          itemsNew++;
+          console.log(`[hpc] ✓ stored: ${title} (${date})`);
         }
-        continue;
+      } else {
+        await supabase
+          .from('meetings')
+          .update({
+            content_hash: contentHash,
+            agenda_url: sourceUrl,
+            needs_ocr: stats.scannedPdfs!.length > 0,
+          })
+          .eq('id', meetingId);
       }
 
-      itemsNew++;
-      console.log(`[hpc] ✓ stored: ${title} (${date})`);
-
-      const meetingId = inserted?.id ?? null;
-      if (meetingId && !needsOcr) {
-        await runLlmExtraction(supabase, meetingId, `SF Historic Preservation Commission — ${title}`, agendaText);
+      if (meetingId) {
+        await persistExtractedItems(supabase, meetingId, fullTitle, agendaText, stats);
       }
     }
 
@@ -381,21 +370,24 @@ async function gatherTextFromLink(
   page: Page,
   url: string,
   maxChars: number,
-): Promise<{ text: string; pdfsLinked: number; pdfsWithText: number }> {
+  stats: GatherStats,
+): Promise<{ text: string }> {
   if (url.toLowerCase().endsWith('.pdf')) {
-    try {
-      const { bytes } = await fetchBytes(url);
-      const r = await extractPdfText(bytes);
-      const trimmed = r.text.slice(0, maxChars);
-      return {
-        text: trimmed,
-        pdfsLinked: 1,
-        pdfsWithText: trimmed.length > 0 ? 1 : 0,
-      };
-    } catch (err) {
-      console.warn(`[hpc] PDF fetch failed ${url}:`, err instanceof Error ? err.message : err);
-      return { text: '', pdfsLinked: 1, pdfsWithText: 0 };
+    stats.expectedPdfCount = (stats.expectedPdfCount ?? 0) + 1;
+    const r = await fetchBytes(url);
+    if (!r.ok) {
+      stats.fetchWarnings!.push(`${url}: ${r.message}`);
+      console.warn(`[hpc] PDF fetch failed ${url}: ${r.message}`);
+      return { text: '' };
     }
+    stats.fetchedPdfCount = (stats.fetchedPdfCount ?? 0) + 1;
+    const parsed = await extractPdfText(r.bytes);
+    if (parsed.needsOcr || !parsed.text) {
+      const label = url.split('/').pop() ?? url;
+      stats.scannedPdfs!.push({ label, bytes: r.bytes });
+      stats.fetchWarnings!.push(`${url}: scanned/OCR-only PDF`);
+    }
+    return { text: parsed.text.slice(0, maxChars) };
   }
 
   try {
@@ -412,35 +404,40 @@ async function gatherTextFromLink(
     );
     console.log(`[hpc] ${url} → ${pdfLinks.length} PDF(s)`);
 
+    stats.expectedPdfCount = (stats.expectedPdfCount ?? 0) + pdfLinks.length;
+
     const parts: string[] = [htmlToText(html)];
     let totalLen = parts[0].length;
-    let pdfsWithText = 0;
 
     for (const linkedPdf of pdfLinks.slice(0, MAX_PDFS_PER_RESOURCE)) {
       if (totalLen >= maxChars) break;
-      try {
-        const { bytes } = await fetchBytes(linkedPdf);
-        const r = await extractPdfText(bytes);
-        if (r.text) {
-          pdfsWithText++;
-          const label = linkedPdf.split('/').pop() ?? linkedPdf;
-          const block = `\n--- ${label} ---\n${r.text.slice(0, MAX_TEXT_PER_PDF)}`;
-          parts.push(block);
-          totalLen += block.length;
-        }
-      } catch (err) {
-        console.warn(`[hpc] PDF fetch/parse failed ${linkedPdf}:`, err instanceof Error ? err.message : err);
+      const r = await fetchBytes(linkedPdf);
+      if (!r.ok) {
+        stats.fetchWarnings!.push(`${linkedPdf}: ${r.message}`);
+        console.warn(`[hpc] PDF fetch failed ${linkedPdf}: ${r.message}`);
+        continue;
+      }
+      stats.fetchedPdfCount = (stats.fetchedPdfCount ?? 0) + 1;
+      const parsed = await extractPdfText(r.bytes);
+      if (parsed.needsOcr || !parsed.text) {
+        const label = linkedPdf.split('/').pop() ?? linkedPdf;
+        stats.scannedPdfs!.push({ label, bytes: r.bytes });
+        stats.fetchWarnings!.push(`${linkedPdf}: scanned/OCR-only PDF`);
+      }
+      if (parsed.text) {
+        const label = linkedPdf.split('/').pop() ?? linkedPdf;
+        const block = `\n--- ${label} ---\n${parsed.text.slice(0, MAX_TEXT_PER_PDF)}`;
+        parts.push(block);
+        totalLen += block.length;
       }
     }
 
-    return {
-      text: parts.join('\n').slice(0, maxChars),
-      pdfsLinked: pdfLinks.length,
-      pdfsWithText,
-    };
+    return { text: parts.join('\n').slice(0, maxChars) };
   } catch (err) {
-    console.warn(`[hpc] resource page fetch failed ${url}:`, err instanceof Error ? err.message : err);
-    return { text: '', pdfsLinked: 0, pdfsWithText: 0 };
+    const msg = err instanceof Error ? err.message : String(err);
+    stats.fetchWarnings!.push(`${url}: ${msg}`);
+    console.warn(`[hpc] resource page fetch failed ${url}: ${msg}`);
+    return { text: '' };
   }
 }
 
@@ -449,55 +446,23 @@ export async function extractExisting(): Promise<void> {
 
   const { data: meetings, error } = await supabase
     .from('meetings')
-    .select('id, title, raw_storage_path, needs_ocr')
+    .select('id, title, raw_storage_path, extraction_status')
     .eq('source_id', SOURCE_ID)
-    .eq('needs_ocr', false);
+    .neq('extraction_status', 'success');
 
   if (error) throw error;
 
-  const unprocessed: typeof meetings = [];
-  for (const m of meetings ?? []) {
-    const { count } = await supabase
-      .from('agenda_items')
-      .select('id', { count: 'exact', head: true })
-      .eq('meeting_id', m.id);
-    if ((count ?? 0) === 0) unprocessed.push(m);
-  }
+  console.log(`[hpc:extract] ${meetings?.length ?? 0} meeting(s) to process`);
 
-  console.log(`[hpc:extract] ${unprocessed.length} meeting(s) to process`);
-
-  for (const meeting of unprocessed) {
-    if (!meeting.raw_storage_path) {
-      console.log(`[hpc:extract] no storage path for ${meeting.id}, skipping`);
-      continue;
-    }
-
-    const { data: fileData, error: dlErr } = await supabase.storage
-      .from('raw')
-      .download(meeting.raw_storage_path);
-
-    if (dlErr || !fileData) {
-      console.warn(`[hpc:extract] download failed for ${meeting.id}:`, dlErr?.message);
-      continue;
-    }
-
+  for (const meeting of meetings ?? []) {
+    if (!meeting.raw_storage_path) continue;
+    const { data: fileData } = await supabase.storage.from('raw').download(meeting.raw_storage_path);
+    if (!fileData) continue;
     const bytes = Buffer.from(await fileData.arrayBuffer());
     const isHtml = meeting.raw_storage_path.endsWith('.html');
-    const agendaText = isHtml
-      ? htmlToText(bytes.toString('utf8'))
-      : (await extractPdfText(bytes)).text;
-
-    await runLlmExtraction(supabase, meeting.id, meeting.title, agendaText);
+    const agendaText = isHtml ? htmlToText(bytes.toString('utf8')) : (await extractPdfText(bytes)).text;
+    await persistExtractedItems(supabase, meeting.id, meeting.title, agendaText);
   }
 
   console.log(`[hpc:extract] done`);
-}
-
-async function runLlmExtraction(
-  supabase: ReturnType<typeof createAdminClient>,
-  meetingId: string,
-  meetingTitle: string,
-  agendaText: string,
-): Promise<void> {
-  await persistExtractedItems(supabase, meetingId, meetingTitle, agendaText);
 }

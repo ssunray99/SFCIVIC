@@ -1,14 +1,45 @@
 // Shared LLM-extraction + geocoding pipeline used by every source scraper.
-// Inputs: a meeting's id, title, and gathered agenda text.
-// Outputs: rows persisted to agenda_items and agenda_item_locations.
+//
+// Inputs: meeting id, title, gathered text, optional gather stats (scanned-PDF
+// bytes for multimodal fallback, fetch warnings, expected/fetched PDF counts).
+//
+// Outputs: rows persisted to agenda_items + agenda_item_locations and the
+// meetings.extraction_status state-machine column transitioned to one of:
+//   - success: extraction returned items and gather had no warnings
+//   - partial: extraction ran but some PDFs failed to fetch / parse, OR the
+//              meeting genuinely had no items but text was sparse
+//   - failed:  LLM threw after retries (and multimodal fallback also failed)
+//
+// Idempotency: persistExtractedItems deletes any prior agenda_items for the
+// meeting before re-inserting, so re-running under a new prompt version
+// replaces v3 rows with v4 cleanly.
 
-import { extractAgendaItems, type ExtractedItem } from './llm.ts';
+import {
+  extractAgendaItems,
+  extractAgendaItemsMultimodal,
+  type ExtractedItem,
+  type ExtractionResult,
+} from './llm.ts';
+import { PROMPT_VERSION } from '../prompts/extract.ts';
 import { geocodeAddress } from './geocode.ts';
 import { neighborhoodFromPoint, districtFromPoint } from './geo.ts';
 import { createAdminClient } from '@/lib/supabase/admin.ts';
 import type { Neighborhood } from '@/lib/constants.ts';
 
 type SupabaseClient = ReturnType<typeof createAdminClient>;
+
+export type GatherStats = {
+  /** PDFs whose text-only parse came back empty/garbage; we'll send the bytes
+   *  to Gemini multimodal as a fallback. */
+  scannedPdfs?: Array<{ label: string; bytes: Buffer }>;
+  /** Per-link failure messages collected during gather; surfaced on
+   *  meetings.fetch_warnings for /analytics dashboards. */
+  fetchWarnings?: string[];
+  /** Total PDFs the source linked from the event page. */
+  expectedPdfCount?: number;
+  /** Of those, how many were successfully fetched. */
+  fetchedPdfCount?: number;
+};
 
 type ResolvedLocation = {
   raw_address: string;
@@ -24,6 +55,32 @@ type EnrichedItem = ExtractedItem & {
   resolvedDistrict: number | null;         // LLM, else first polygon hit
   locations: ResolvedLocation[];
 };
+
+/**
+ * Idempotency probe: returns whether a meeting with this content_hash has
+ * already been successfully extracted under the current prompt version.
+ *
+ * Each source calls this before doing any expensive PDF gather. If `fresh`
+ * is true, skip the meeting entirely. If `existingId` is non-null but
+ * `fresh` is false, the row exists but extraction is incomplete / stale —
+ * re-run extraction for that meeting_id.
+ */
+export async function checkMeetingFreshness(
+  supabase: SupabaseClient,
+  sourceId: string,
+  contentHash: string,
+): Promise<{ fresh: boolean; existingId: string | null; status: string | null }> {
+  const { data } = await supabase
+    .from('meetings')
+    .select('id, extraction_status, last_prompt_version')
+    .eq('source_id', sourceId)
+    .eq('content_hash', contentHash)
+    .maybeSingle();
+  if (!data) return { fresh: false, existingId: null, status: null };
+  const row = data as { id: string; extraction_status: string; last_prompt_version: string | null };
+  const fresh = row.extraction_status === 'success' && row.last_prompt_version === PROMPT_VERSION;
+  return { fresh, existingId: row.id, status: row.extraction_status };
+}
 
 async function enrichItem(item: ExtractedItem): Promise<EnrichedItem> {
   const locations: ResolvedLocation[] = [];
@@ -82,9 +139,11 @@ async function enrichItem(item: ExtractedItem): Promise<EnrichedItem> {
 
 /**
  * Persist already-extracted items. Use when you've called extractAgendaItems
- * yourself (e.g., to inspect items before committing destructive operations
- * like deleting stale rows). For the standard scrape path, prefer
- * persistExtractedItems below — it wraps extract + persist in one call.
+ * yourself (e.g., to inspect items before committing destructive operations).
+ * For the standard scrape path, prefer persistExtractedItems below.
+ *
+ * Always deletes any prior agenda_items for meetingId first so re-extracting
+ * under a new prompt_version replaces v3 rows with v4 cleanly.
  */
 export async function persistItems(
   supabase: SupabaseClient,
@@ -93,6 +152,10 @@ export async function persistItems(
   promptVersion: string,
   model: string,
 ): Promise<{ inserted: number; locations: number }> {
+  // Replace any existing items for this meeting. Cheap because there are at
+  // most a few dozen per meeting and a delete-by-meeting_id hits the index.
+  await supabase.from('agenda_items').delete().eq('meeting_id', meetingId);
+
   if (items.length === 0) {
     console.log(`[extract] no items for ${meetingId}`);
     return { inserted: 0, locations: 0 };
@@ -173,16 +236,134 @@ export async function persistItems(
 }
 
 /**
- * Standard scrape path: extract via LLM and persist in one call.
- * Returns silently when no items are extracted.
+ * Standard scrape path: extract via LLM (with multimodal fallback for scanned
+ * PDFs) and persist + transition extraction_status in one call.
+ *
+ * Status transitions:
+ *   success — items extracted, no fetch warnings, all linked PDFs fetched
+ *   partial — items extracted (or zero items), but gather had warnings or
+ *             some linked PDFs failed
+ *   failed  — LLM threw after retries AND multimodal fallback also failed
  */
 export async function persistExtractedItems(
   supabase: SupabaseClient,
   meetingId: string,
   meetingTitle: string,
   agendaText: string,
+  gatherStats?: GatherStats,
 ): Promise<void> {
   console.log(`[extract] running for meeting ${meetingId}`);
-  const { items, promptVersion, model } = await extractAgendaItems(agendaText, meetingTitle);
-  await persistItems(supabase, meetingId, items, promptVersion, model);
+  const scannedPdfs = gatherStats?.scannedPdfs ?? [];
+  const fetchWarnings = gatherStats?.fetchWarnings ?? [];
+  const expected = gatherStats?.expectedPdfCount ?? null;
+  const fetched = gatherStats?.fetchedPdfCount ?? null;
+
+  // Bump attempt counter + record gather stats now, so partial gathers are
+  // visible on /analytics even if extraction throws below.
+  // (Read-then-update: there's a TOCTOU race if two scrapers ever process
+  // the same meeting in parallel, but the scraper is serial today and the
+  // counter is informational, not a correctness primitive.)
+  const { data: cur } = await supabase
+    .from('meetings')
+    .select('extraction_attempt_count')
+    .eq('id', meetingId)
+    .single();
+  const nextAttempt =
+    ((cur as { extraction_attempt_count?: number } | null)?.extraction_attempt_count ?? 0) + 1;
+
+  await supabase
+    .from('meetings')
+    .update({
+      extraction_attempt_count: nextAttempt,
+      fetch_warnings: fetchWarnings,
+      expected_pdf_count: expected,
+      fetched_pdf_count: fetched,
+      last_extracted_at: new Date().toISOString(),
+    })
+    .eq('id', meetingId);
+
+  let result: ExtractionResult | null = null;
+  let lastError: string | null = null;
+
+  try {
+    result = await extractAgendaItems(agendaText, meetingTitle);
+    // Multimodal fallback: if we have scanned PDFs and the text-only pass
+    // returned a thin or empty result, try again with the PDF bytes attached
+    // and union the items.
+    if (scannedPdfs.length > 0 && result.items.length < 3) {
+      console.log(
+        `[extract] text pass returned ${result.items.length} item(s); ` +
+        `retrying with multimodal (${scannedPdfs.length} scanned PDF(s))`,
+      );
+      try {
+        const mm = await extractAgendaItemsMultimodal(agendaText, scannedPdfs, meetingTitle);
+        result = mergeResults(result, mm);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[extract] multimodal pass failed; keeping text-only result: ${msg}`);
+      }
+    }
+  } catch (err) {
+    lastError = err instanceof Error ? err.message : String(err);
+    console.error(`[extract] LLM extraction failed for ${meetingId}: ${lastError}`);
+    if (scannedPdfs.length > 0) {
+      try {
+        result = await extractAgendaItemsMultimodal(agendaText, scannedPdfs, meetingTitle);
+        lastError = null;
+      } catch (mmErr) {
+        const mmMsg = mmErr instanceof Error ? mmErr.message : String(mmErr);
+        lastError = `text: ${lastError}; multimodal: ${mmMsg}`;
+      }
+    }
+  }
+
+  if (!result || (lastError && result.items.length === 0)) {
+    await setStatus(supabase, meetingId, 'failed', lastError ?? 'unknown extraction failure', null);
+    return;
+  }
+
+  await persistItems(supabase, meetingId, result.items, result.promptVersion, result.model);
+
+  const isPartial =
+    fetchWarnings.length > 0 ||
+    (expected !== null && fetched !== null && fetched < expected);
+
+  await setStatus(
+    supabase,
+    meetingId,
+    isPartial ? 'partial' : 'success',
+    null,
+    result.promptVersion,
+  );
+}
+
+function mergeResults(a: ExtractionResult, b: ExtractionResult): ExtractionResult {
+  // Use title (lowercased + collapsed whitespace) as the dedupe key. Same
+  // legislative item sometimes appears with slightly different positions in
+  // text vs scanned passes, but the title is stable.
+  const seen = new Set<string>();
+  const merged: ExtractedItem[] = [];
+  for (const item of [...a.items, ...b.items]) {
+    const key = item.title.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (key && !seen.has(key)) {
+      seen.add(key);
+      merged.push(item);
+    }
+  }
+  return { items: merged, promptVersion: a.promptVersion, model: a.model };
+}
+
+async function setStatus(
+  supabase: SupabaseClient,
+  meetingId: string,
+  status: 'success' | 'partial' | 'failed',
+  error: string | null,
+  promptVersion: string | null,
+): Promise<void> {
+  const update: Record<string, unknown> = {
+    extraction_status: status,
+    extraction_error: error,
+  };
+  if (promptVersion) update.last_prompt_version = promptVersion;
+  await supabase.from('meetings').update(update).eq('id', meetingId);
 }
