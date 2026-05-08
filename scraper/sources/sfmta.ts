@@ -52,9 +52,14 @@ export async function scrape(): Promise<void> {
 
     const meetingUrls = new Set<string>();
 
+    // Listing pages SFMTA uses to surface board meetings:
+    //   /meetings-events                    — upcoming + recent (handful of meetings)
+    //   /past-meetings-and-events/2625      — paginated past archive (~18 pages × 14)
+    // The previous URL `/calendar/sfmta-board-directors-meetings` returns 404
+    // as of 2026-Q2 and is dropped.
     for (const listingUrl of [
       `${BASE_URL}/meetings-events`,
-      `${BASE_URL}/calendar/sfmta-board-directors-meetings`,
+      `${BASE_URL}/past-meetings-and-events/2625`,
     ]) {
       await collectBoardUrls(page, listingUrl, meetingUrls);
     }

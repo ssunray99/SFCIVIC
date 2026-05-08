@@ -134,6 +134,12 @@ jobs:
             printf '%s' "${{ secrets.GEMINI_API_KEY }}" | tr -d '\r\n'
             printf '\n'
           } > .env.local
+      - name: '🔍 CI env + query diagnostic'
+        # Sanitized probe — prints env-var shape + tests several query types
+        # so we can pinpoint why PGRST125 hits enrich/backfill but not scrape.
+        # Continues even on diagnostic failure so the next step still runs.
+        continue-on-error: true
+        run: npx tsx --env-file=.env.local scraper/setup/_ci-env-diag.ts
       - name: Enrich Legistar HTML
         run: npm run enrich:legislation
 
@@ -181,5 +187,8 @@ jobs:
             printf '%s' "${{ secrets.GEMINI_API_KEY }}" | tr -d '\r\n'
             printf '\n'
           } > .env.local
+      - name: '🔍 CI env + query diagnostic'
+        continue-on-error: true
+        run: npx tsx --env-file=.env.local scraper/setup/_ci-env-diag.ts
       - name: Backfill 50 stale rows
         run: npm run backfill:prompt-version -- --limit 50

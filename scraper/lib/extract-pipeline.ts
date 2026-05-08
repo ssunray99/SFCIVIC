@@ -142,8 +142,12 @@ async function enrichItem(item: ExtractedItem): Promise<EnrichedItem> {
  * yourself (e.g., to inspect items before committing destructive operations).
  * For the standard scrape path, prefer persistExtractedItems below.
  *
- * Always deletes any prior agenda_items for meetingId first so re-extracting
- * under a new prompt_version replaces v3 rows with v4 cleanly.
+ * Replaces any prior agenda_items for meetingId so re-extracting under a new
+ * prompt_version cleanly supersedes the old rows. To prevent accidental wipes
+ * when the new extraction comes back empty (LLM hiccup, transient gather
+ * failure), the delete is skipped if items is empty AND the meeting already
+ * has items. The caller marks status='partial' in that branch so the next
+ * scrape retries.
  */
 export async function persistItems(
   supabase: SupabaseClient,
@@ -151,15 +155,30 @@ export async function persistItems(
   items: ExtractedItem[],
   promptVersion: string,
   model: string,
-): Promise<{ inserted: number; locations: number }> {
-  // Replace any existing items for this meeting. Cheap because there are at
-  // most a few dozen per meeting and a delete-by-meeting_id hits the index.
-  await supabase.from('agenda_items').delete().eq('meeting_id', meetingId);
-
+): Promise<{ inserted: number; locations: number; preservedExisting: boolean }> {
   if (items.length === 0) {
+    // Don't wipe pre-existing items just because this extraction returned
+    // nothing — that's the failure mode that turns a transient LLM hiccup
+    // into permanent data loss. Check first; only declare "no items" if
+    // there were also none before.
+    const { count } = await supabase
+      .from('agenda_items')
+      .select('*', { count: 'exact', head: true })
+      .eq('meeting_id', meetingId);
+    const preExisting = count ?? 0;
+    if (preExisting > 0) {
+      console.warn(
+        `[extract] new extraction returned 0 items but ${preExisting} item(s) already exist for ${meetingId}; preserving existing rows`,
+      );
+      return { inserted: 0, locations: 0, preservedExisting: true };
+    }
     console.log(`[extract] no items for ${meetingId}`);
-    return { inserted: 0, locations: 0 };
+    return { inserted: 0, locations: 0, preservedExisting: false };
   }
+
+  // We have new items — replace prior rows. Cheap (delete-by-meeting_id
+  // hits the index) and atomic enough for our use case.
+  await supabase.from('agenda_items').delete().eq('meeting_id', meetingId);
 
   const enriched: EnrichedItem[] = [];
   for (const item of items) enriched.push(await enrichItem(item));
@@ -191,7 +210,7 @@ export async function persistItems(
 
   if (error || !inserted) {
     console.error(`[extract] agenda_items insert failed for ${meetingId}:`, error?.message);
-    return { inserted: 0, locations: 0 };
+    return { inserted: 0, locations: 0, preservedExisting: false };
   }
 
   // Pair inserted item IDs back with their resolved locations and bulk-insert.
@@ -232,7 +251,7 @@ export async function persistItems(
   console.log(
     `[extract] ✓ ${inserted.length} item(s), ${locationRows.length} location(s) for ${meetingId}`,
   );
-  return { inserted: inserted.length, locations: locationRows.length };
+  return { inserted: inserted.length, locations: locationRows.length, preservedExisting: false };
 }
 
 /**
@@ -322,7 +341,27 @@ export async function persistExtractedItems(
     return;
   }
 
-  await persistItems(supabase, meetingId, result.items, result.promptVersion, result.model);
+  const persistResult = await persistItems(
+    supabase,
+    meetingId,
+    result.items,
+    result.promptVersion,
+    result.model,
+  );
+
+  // If persistItems preserved existing items (new extraction returned 0 but
+  // previous rows were kept), mark partial so a future scrape retries
+  // instead of locking the meeting at status='success' with stale items.
+  if (persistResult.preservedExisting) {
+    await setStatus(
+      supabase,
+      meetingId,
+      'partial',
+      'new extraction returned 0 items; preserved existing rows for retry',
+      null, // intentionally not stamping last_prompt_version=v4 — those rows are still v3
+    );
+    return;
+  }
 
   const isPartial =
     fetchWarnings.length > 0 ||
