@@ -11,21 +11,23 @@ import { sha256 } from '../lib/hash.ts';
 import { extractPdfText } from '../lib/pdf.ts';
 import { uploadRaw } from '../lib/storage.ts';
 import { htmlToText } from '../lib/llm.ts';
-import { persistExtractedItems } from '../lib/extract-pipeline.ts';
+import {
+  persistExtractedItems,
+  checkMeetingFreshness,
+  type GatherStats,
+} from '../lib/extract-pipeline.ts';
 import { createAdminClient } from '@/lib/supabase/admin.ts';
 
 const SOURCE_ID = 'sfmta';
 const BASE_URL = 'https://www.sfmta.com';
 const SCRAPE_FROM = `${new Date().getFullYear()}-01-01`;
 
-const MAX_TEXT_PER_PDF = 20_000;
-const MAX_TEXT_PER_RESOURCE = 80_000;
-const MAX_TEXT_TOTAL = 100_000;
+// Caps lifted in v4.
+const MAX_TEXT_PER_PDF = 100_000;
+const MAX_TEXT_PER_RESOURCE = 400_000;
+const MAX_TEXT_TOTAL = 500_000;
 
 function isBoardMeetingUrl(href: string): boolean {
-  // Strip query string and fragment before matching — we don't want listing-page
-  // anchor variants (/calendar/sfmta-board-directors-meetings#main) collected.
-  // Require the detail-page slug pattern: /calendar/board-directors-meeting-<date>
   const path = href.split('?')[0].split('#')[0].toLowerCase();
   return path.includes('/calendar/board-directors-meeting-');
 }
@@ -50,7 +52,6 @@ export async function scrape(): Promise<void> {
 
     const meetingUrls = new Set<string>();
 
-    // Collect board meeting URLs from main listing (upcoming + paginated past).
     for (const listingUrl of [
       `${BASE_URL}/meetings-events`,
       `${BASE_URL}/calendar/sfmta-board-directors-meetings`,
@@ -70,15 +71,12 @@ export async function scrape(): Promise<void> {
         () => document.querySelector('h1')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
       );
 
-      // Skip if not actually a Board of Directors meeting
       if (!title.toLowerCase().includes('board') || !title.toLowerCase().includes('directors')) {
         console.log(`[sfmta] skipping non-board page: ${title}`);
         continue;
       }
 
       const meetingDate = await page.evaluate((): string | null => {
-        // Only accept <time datetime> values that start with a 4-digit year;
-        // time-only values like "07:00" would otherwise compare < SCRAPE_FROM.
         for (const el of Array.from(document.querySelectorAll('time[datetime]'))) {
           const dt = (el as HTMLTimeElement).dateTime;
           if (dt && /^\d{4}-\d{2}-\d{2}/.test(dt)) return dt.slice(0, 10);
@@ -94,7 +92,6 @@ export async function scrape(): Promise<void> {
         return null;
       });
 
-      // Last-resort: parse date from URL slug  e.g. board-directors-meeting-may-5-2026
       const parsedMeetingDate = meetingDate ?? (() => {
         const slug = meetingUrl.split('/').pop() ?? '';
         const m = slug.match(
@@ -126,11 +123,30 @@ export async function scrape(): Promise<void> {
       const today = new Date().toISOString().slice(0, 10);
       const isPast = !!parsedMeetingDate && parsedMeetingDate < today;
 
+      const bytes = Buffer.from(eventHtml);
+      const contentHash = sha256(bytes);
+      const externalId = meetingUrl.split('/').filter(Boolean).pop() ?? null;
+
+      const freshness = await checkMeetingFreshness(supabase, SOURCE_ID, contentHash);
+      if (freshness.fresh) {
+        console.log(`[sfmta] already stored + extracted, skipping`);
+        continue;
+      }
+      if (freshness.existingId) {
+        console.log(`[sfmta] re-extracting existing meeting (status=${freshness.status})`);
+      }
+
+      const stats: GatherStats = {
+        scannedPdfs: [],
+        fetchWarnings: [],
+        expectedPdfCount: 0,
+        fetchedPdfCount: 0,
+      };
       let agendaText = '';
 
       if (agendaLink) {
         console.log(`[sfmta] agenda: ${agendaLink}`);
-        const r = await gatherText(page, agendaLink, MAX_TEXT_PER_RESOURCE);
+        const r = await gatherText(page, agendaLink, MAX_TEXT_PER_RESOURCE, stats);
         agendaText += r;
       }
 
@@ -140,82 +156,90 @@ export async function scrape(): Promise<void> {
           page,
           minutesLink,
           Math.min(MAX_TEXT_PER_RESOURCE, MAX_TEXT_TOTAL - agendaText.length),
+          stats,
         );
         if (r) agendaText += `\n\n======== MINUTES ========\n\n${r}`;
       }
 
       if (!agendaText.trim()) agendaText = htmlToText(eventHtml);
-      const textLength = agendaText.length;
       agendaText = agendaText.slice(0, MAX_TEXT_TOTAL);
 
-      const needsOcr = agendaText.trim().length < 200;
-      if (needsOcr) console.warn(`[sfmta] needs OCR: ${meetingUrl}`);
-
       const sourceUrl = isPast ? meetingUrl : (agendaLink ?? meetingUrl);
-      const bytes = Buffer.from(eventHtml);
-      const contentHash = sha256(bytes);
       const date = parsedMeetingDate ?? new Date().toISOString().slice(0, 10);
-      const externalId = meetingUrl.split('/').filter(Boolean).pop() ?? null;
-
-      const { data: existing } = await supabase
-        .from('meetings')
-        .select('id')
-        .eq('source_id', SOURCE_ID)
-        .or(`content_hash.eq.${contentHash},external_id.eq.${externalId}`)
-        .maybeSingle();
-
-      if (existing) {
-        console.log(`[sfmta] already stored, skipping`);
-        continue;
-      }
-
-      let rawStoragePath: string | null = null;
-      try {
-        rawStoragePath = await uploadRaw({
-          sourceId: SOURCE_ID,
-          contentHash,
-          bytes,
-          mime: 'text/html',
-        });
-      } catch (err) {
-        console.warn(`[sfmta] storage upload failed, continuing:`, err);
-      }
-
       const fullTitle = title.startsWith('SFMTA') ? title : `SFMTA ${title}`;
 
-      const { error: insertErr } = await supabase.from('meetings').insert({
-        source_id: SOURCE_ID,
-        external_id: externalId,
-        title: fullTitle,
-        meeting_date: date,
-        agenda_url: sourceUrl,
-        raw_storage_path: rawStoragePath,
-        content_hash: contentHash,
-        needs_ocr: needsOcr,
-        text_length: textLength,
-      });
+      let meetingId: string | null = freshness.existingId;
 
-      if (insertErr) {
-        if (insertErr.code === '23505') {
-          console.log(`[sfmta] duplicate insert skipped`);
-        } else {
-          console.error(`[sfmta] insert error:`, insertErr.message);
+      if (!meetingId) {
+        let rawStoragePath: string | null = null;
+        try {
+          rawStoragePath = await uploadRaw({
+            sourceId: SOURCE_ID,
+            contentHash,
+            bytes,
+            mime: 'text/html',
+          });
+        } catch (err) {
+          console.warn(`[sfmta] storage upload failed, continuing:`, err);
         }
-        continue;
+
+        const { data: inserted, error: insertErr } = await supabase
+          .from('meetings')
+          .insert({
+            source_id: SOURCE_ID,
+            external_id: externalId,
+            title: fullTitle,
+            meeting_date: date,
+            agenda_url: sourceUrl,
+            raw_storage_path: rawStoragePath,
+            content_hash: contentHash,
+            needs_ocr: stats.scannedPdfs!.length > 0,
+          })
+          .select('id')
+          .single();
+
+        if (insertErr) {
+          if (insertErr.code === '23505') {
+            const { data: existingRow } = await supabase
+              .from('meetings')
+              .select('id')
+              .eq('source_id', SOURCE_ID)
+              .eq('external_id', externalId)
+              .maybeSingle();
+            if (existingRow) {
+              await supabase
+                .from('meetings')
+                .update({
+                  content_hash: contentHash,
+                  raw_storage_path: rawStoragePath,
+                  agenda_url: sourceUrl,
+                  needs_ocr: stats.scannedPdfs!.length > 0,
+                })
+                .eq('id', existingRow.id);
+              meetingId = existingRow.id;
+            }
+          } else {
+            console.error(`[sfmta] insert error:`, insertErr.message);
+            continue;
+          }
+        } else {
+          meetingId = inserted?.id ?? null;
+          itemsNew++;
+          console.log(`[sfmta] ✓ stored: ${fullTitle} (${date})`);
+        }
+      } else {
+        await supabase
+          .from('meetings')
+          .update({
+            content_hash: contentHash,
+            agenda_url: sourceUrl,
+            needs_ocr: stats.scannedPdfs!.length > 0,
+          })
+          .eq('id', meetingId);
       }
 
-      itemsNew++;
-      console.log(`[sfmta] ✓ stored: ${fullTitle} (${date})`);
-
-      const { data: newRow } = await supabase
-        .from('meetings')
-        .select('id')
-        .eq('source_id', SOURCE_ID)
-        .eq('content_hash', contentHash)
-        .single();
-
-      if (newRow?.id && !needsOcr) {
-        await persistExtractedItems(supabase, newRow.id, fullTitle, agendaText);
+      if (meetingId) {
+        await persistExtractedItems(supabase, meetingId, fullTitle, agendaText, stats);
       }
     }
 
@@ -248,6 +272,7 @@ async function collectBoardUrls(
   out: Set<string>,
 ): Promise<void> {
   console.log(`[sfmta] scanning listing: ${listingUrl}`);
+  // Bumped from 20 in origin's #23 fix.
   const MAX_PAGES = 50;
 
   for (let pageNum = 0; pageNum < MAX_PAGES; pageNum++) {
@@ -281,16 +306,28 @@ async function collectBoardUrls(
   }
 }
 
-async function gatherText(page: Page, url: string, maxChars: number): Promise<string> {
+async function gatherText(
+  page: Page,
+  url: string,
+  maxChars: number,
+  stats: GatherStats,
+): Promise<string> {
   if (url.toLowerCase().endsWith('.pdf')) {
-    try {
-      const { bytes } = await fetchBytes(url);
-      const r = await extractPdfText(bytes);
-      return r.text.slice(0, maxChars);
-    } catch (err) {
-      console.warn(`[sfmta] PDF fetch failed ${url}:`, err instanceof Error ? err.message : err);
+    stats.expectedPdfCount = (stats.expectedPdfCount ?? 0) + 1;
+    const r = await fetchBytes(url);
+    if (!r.ok) {
+      stats.fetchWarnings!.push(`${url}: ${r.message}`);
+      console.warn(`[sfmta] PDF fetch failed ${url}: ${r.message}`);
       return '';
     }
+    stats.fetchedPdfCount = (stats.fetchedPdfCount ?? 0) + 1;
+    const parsed = await extractPdfText(r.bytes);
+    if (parsed.needsOcr || !parsed.text) {
+      const label = url.split('/').pop() ?? url;
+      stats.scannedPdfs!.push({ label, bytes: r.bytes });
+      stats.fetchWarnings!.push(`${url}: scanned/OCR-only PDF`);
+    }
+    return parsed.text.slice(0, maxChars);
   }
 
   try {
@@ -309,28 +346,36 @@ async function gatherText(page: Page, url: string, maxChars: number): Promise<st
       ],
     );
 
-    for (const pdfUrl of pdfLinks.slice(0, 8)) {
+    stats.expectedPdfCount = (stats.expectedPdfCount ?? 0) + pdfLinks.length;
+
+    for (const pdfUrl of pdfLinks.slice(0, 12)) {
       if (totalLen >= maxChars) break;
-      try {
-        const { bytes } = await fetchBytes(pdfUrl);
-        const r = await extractPdfText(bytes);
-        if (r.text) {
-          const label = pdfUrl.split('/').pop() ?? pdfUrl;
-          const block = `\n--- ${label} ---\n${r.text.slice(0, MAX_TEXT_PER_PDF)}`;
-          parts.push(block);
-          totalLen += block.length;
-        }
-      } catch (err) {
-        console.warn(
-          `[sfmta] PDF parse failed ${pdfUrl}:`,
-          err instanceof Error ? err.message : err,
-        );
+      const r = await fetchBytes(pdfUrl);
+      if (!r.ok) {
+        stats.fetchWarnings!.push(`${pdfUrl}: ${r.message}`);
+        console.warn(`[sfmta] PDF fetch failed ${pdfUrl}: ${r.message}`);
+        continue;
+      }
+      stats.fetchedPdfCount = (stats.fetchedPdfCount ?? 0) + 1;
+      const parsed = await extractPdfText(r.bytes);
+      if (parsed.needsOcr || !parsed.text) {
+        const label = pdfUrl.split('/').pop() ?? pdfUrl;
+        stats.scannedPdfs!.push({ label, bytes: r.bytes });
+        stats.fetchWarnings!.push(`${pdfUrl}: scanned/OCR-only PDF`);
+      }
+      if (parsed.text) {
+        const label = pdfUrl.split('/').pop() ?? pdfUrl;
+        const block = `\n--- ${label} ---\n${parsed.text.slice(0, MAX_TEXT_PER_PDF)}`;
+        parts.push(block);
+        totalLen += block.length;
       }
     }
 
     return parts.join('\n').slice(0, maxChars);
   } catch (err) {
-    console.warn(`[sfmta] page fetch failed ${url}:`, err instanceof Error ? err.message : err);
+    const msg = err instanceof Error ? err.message : String(err);
+    stats.fetchWarnings!.push(`${url}: ${msg}`);
+    console.warn(`[sfmta] page fetch failed ${url}: ${msg}`);
     return '';
   }
 }

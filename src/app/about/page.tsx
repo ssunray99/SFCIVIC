@@ -1,72 +1,124 @@
-import Link from 'next/link';
 import { SOURCES } from '@/lib/constants';
-import { SectionRule } from '@/components/primitives';
 
 export const metadata = {
   title: 'About — SF Civic Tracker',
-  description: 'About SF Civic Tracker, where the data comes from, and its limitations.',
+  description: 'How SF Civic Tracker works, where the data comes from, and its limitations.',
 };
 
 export default function AboutPage() {
   return (
-    <main className="mx-auto max-w-4xl px-10 py-12 flex flex-col gap-10">
-      <Link
-        href="/"
-        className="font-mono uppercase text-[11px] tracking-[0.16em] text-[var(--ink-3)] hover:text-[var(--ink-2)] w-fit"
-      >
-        ← Home
-      </Link>
+    <main className="mx-auto flex min-h-screen max-w-2xl flex-col gap-10 px-6 py-12">
+      <a href="/" className="text-sm text-zinc-500 hover:underline dark:text-zinc-400">
+        ← Back to meetings
+      </a>
 
-      <header className="flex flex-col gap-3">
-        <h1
-          className="font-serif tracking-tight text-[var(--ink)]"
-          style={{ fontSize: 48, lineHeight: 1, fontWeight: 500 }}
-        >
-          About SF<span className="text-[var(--accent)]">·</span>
-          <em>Civic</em>
-        </h1>
+      <header className="flex flex-col gap-2">
+        <h1 className="text-3xl font-semibold tracking-tight">About SF Civic Tracker</h1>
+        <p className="text-zinc-600 dark:text-zinc-400">
+          Plain-English summaries of San Francisco civic meetings, updated automatically.
+        </p>
       </header>
 
       <section className="flex flex-col gap-4">
-        <SectionRule label="What it does" />
-        <p className="font-serif leading-relaxed text-[var(--ink)]" style={{ fontSize: 18 }}>
-          SF Civic Tracker turns complex legislative meeting content into something
-          you can easily browse and search. It gathers content from civic meetings
-          and presents it with a concise summary, clear topic tags, and the
-          relevant neighborhood and supervisor district&mdash;so you can quickly
-          spot what matters to you, track legislation, and submit public comment
-          before deadlines.
+        <h2 className="text-lg font-medium">What it does</h2>
+        <p className="text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
+          SF Civic Tracker scrapes published agendas from SF Planning Commission
+          hearings and extracts each agenda item using Gemini 2.5 Flash, a fast AI model.
+          Each item gets a plain-English summary, a topic label, and the neighborhood
+          and supervisor district it affects — so you can quickly find what matters to you
+          without reading dense PDFs.
         </p>
       </section>
 
       <section className="flex flex-col gap-4">
-        <SectionRule label="Civic groups tracked" />
-        <ul className="flex flex-col gap-2">
+        <h2 className="text-lg font-medium">Data sources</h2>
+        <ul className="flex flex-col gap-2 text-sm text-zinc-700 dark:text-zinc-300">
           {SOURCES.map((s) => (
-            <li
-              key={s.id}
-              className="flex items-baseline gap-3 text-[15.5px] text-[var(--ink-2)]"
-            >
-              <span className="text-[var(--ink-3)]">—</span>
-              <span className="text-[var(--ink)]">{s.name}</span>
+            <li key={s.id} className="flex items-start gap-2">
+              <span className="mt-0.5 text-zinc-400">—</span>
+              <span>
+                <strong>{s.name}</strong>
+                {s.id === 'planning' && (
+                  <>
+                    {' '}via{' '}
+                    <a
+                      href="https://sfplanning.org/hearings-cpc-grid"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline"
+                    >
+                      sfplanning.org
+                    </a>
+                  </>
+                )}
+                {s.id === 'bos' && (
+                  <>
+                    {' '}via{' '}
+                    <a
+                      href="https://sfbos.org/meetings"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline"
+                    >
+                      sfbos.org
+                    </a>
+                  </>
+                )}
+              </span>
             </li>
           ))}
         </ul>
       </section>
 
       <section className="flex flex-col gap-4">
-        <SectionRule label="Limitations" />
-        <ul className="flex flex-col gap-3 text-[15.5px] leading-relaxed text-[var(--ink-2)]">
+        <h2 className="text-lg font-medium">How it works</h2>
+        <ol className="flex flex-col gap-2 text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
           <li className="flex gap-3">
-            <span className="shrink-0 text-[var(--ink-3)]">—</span>
+            <span className="shrink-0 font-medium text-zinc-400">1.</span>
             <span>
-              Summaries are auto-generated and may be incomplete, misleading, or
-              wrong. Always verify against the{' '}
+              A scraper built with Playwright visits the SF Planning Commission hearing
+              grid and downloads each event page and its agenda PDFs.
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <span className="shrink-0 font-medium text-zinc-400">2.</span>
+            <span>
+              The agenda text (and any scanned PDFs) is sent to{' '}
+              <a
+                href="https://deepmind.google/technologies/gemini/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                Google
+              </a>
+              &rsquo;s Gemini 2.5 Flash model, which extracts each agenda item and writes a
+              short summary in plain English.
+            </span>
+          </li>
+          <li className="flex gap-3">
+            <span className="shrink-0 font-medium text-zinc-400">3.</span>
+            <span>
+              Items are stored in a Supabase database and served to this page, which you
+              can filter by neighborhood, supervisor district, or topic.
+            </span>
+          </li>
+        </ol>
+      </section>
+
+      <section className="flex flex-col gap-4">
+        <h2 className="text-lg font-medium">Limitations</h2>
+        <ul className="flex flex-col gap-2 text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">
+          <li className="flex gap-3">
+            <span className="shrink-0 text-zinc-400">—</span>
+            <span>
+              Summaries are AI-generated and may be incomplete, misleading, or wrong.
+              Always verify against the{' '}
               <a
                 href="https://sfplanning.org/hearings-commission"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="underline hover:text-[var(--ink)]"
+                className="underline"
               >
                 official agenda
               </a>{' '}
@@ -74,21 +126,25 @@ export default function AboutPage() {
             </span>
           </li>
           <li className="flex gap-3">
-            <span className="shrink-0 text-[var(--ink-3)]">—</span>
+            <span className="shrink-0 text-zinc-400">—</span>
             <span>
-              Some older meetings posted as scanned PDFs may appear without item
-              summaries.
+              Scanned PDFs cannot be read automatically. Items from those meetings will
+              appear without summaries.
             </span>
           </li>
           <li className="flex gap-3">
-            <span className="shrink-0 text-[var(--ink-3)]">—</span>
+            <span className="shrink-0 text-zinc-400">—</span>
             <span>
-              This is an unofficial project with no affiliation with the City and
-              County of San Francisco.
+              This is an unofficial project with no affiliation with the City and County
+              of San Francisco.
             </span>
           </li>
         </ul>
       </section>
+
+      <footer className="border-t border-zinc-200 pt-6 text-xs text-zinc-500 dark:border-zinc-800">
+        Built as a learning project.
+      </footer>
     </main>
   );
 }

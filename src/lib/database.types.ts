@@ -268,8 +268,16 @@ export type Database = {
         Row: {
           agenda_url: string | null
           content_hash: string
+          expected_pdf_count: number | null
           external_id: string | null
+          extraction_attempt_count: number
+          extraction_error: string | null
+          extraction_status: string
+          fetch_warnings: Json
+          fetched_pdf_count: number | null
           id: string
+          last_extracted_at: string | null
+          last_prompt_version: string | null
           location: string | null
           meeting_date: string
           meeting_time: string | null
@@ -283,8 +291,16 @@ export type Database = {
         Insert: {
           agenda_url?: string | null
           content_hash: string
+          expected_pdf_count?: number | null
           external_id?: string | null
+          extraction_attempt_count?: number
+          extraction_error?: string | null
+          extraction_status?: string
+          fetch_warnings?: Json
+          fetched_pdf_count?: number | null
           id?: string
+          last_extracted_at?: string | null
+          last_prompt_version?: string | null
           location?: string | null
           meeting_date: string
           meeting_time?: string | null
@@ -298,8 +314,16 @@ export type Database = {
         Update: {
           agenda_url?: string | null
           content_hash?: string
+          expected_pdf_count?: number | null
           external_id?: string | null
+          extraction_attempt_count?: number
+          extraction_error?: string | null
+          extraction_status?: string
+          fetch_warnings?: Json
+          fetched_pdf_count?: number | null
           id?: string
+          last_extracted_at?: string | null
+          last_prompt_version?: string | null
           location?: string | null
           meeting_date?: string
           meeting_time?: string | null

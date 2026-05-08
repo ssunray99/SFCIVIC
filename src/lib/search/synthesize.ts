@@ -1,22 +1,22 @@
 // Q&A synthesizer for the /ask flow.
 //
-// Given the user's question + a list of matched agenda items, ask Claude
-// Haiku 4.5 to write a 2–4 sentence narrative answer with [N] citations
-// pointing back to the items. The /ask page renders the answer above the
-// item list and turns each [N] into a link/anchor.
+// Given the user's question + a list of matched agenda items, ask Gemini 2.5
+// Flash to write a 2–4 sentence narrative answer with [N] citations pointing
+// back to the items. The /ask page renders the answer above the item list
+// and turns each [N] into a link/anchor.
 //
 // Server-only.
 
-import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenAI } from '@google/genai';
 
-const MODEL = 'claude-haiku-4-5-20251001';
+const MODEL = 'gemini-2.5-flash';
 
-let _client: Anthropic | null = null;
-function getClient(): Anthropic {
+let _client: GoogleGenAI | null = null;
+function getClient(): GoogleGenAI {
   if (!_client) {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
-    _client = new Anthropic({ apiKey });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
+    _client = new GoogleGenAI({ apiKey });
   }
   return _client;
 }
@@ -60,8 +60,8 @@ export async function synthesizeAnswer(
   question: string,
   items: ItemContext[],
 ): Promise<string> {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY is not set');
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY is not set');
   }
 
   if (items.length === 0) {
@@ -71,22 +71,35 @@ export async function synthesizeAnswer(
   const itemsBlock = items.map(formatItem).join('\n\n');
   const userMessage = `Question: ${question}\n\nMatching agenda items:\n\n${itemsBlock}`;
 
-  const response = await getClient().messages.create({
-    model: MODEL,
-    max_tokens: 600,
-    system: [
-      {
-        type: 'text',
-        text: SYSTEM_PROMPT,
-        cache_control: { type: 'ephemeral' },
+  let response;
+  try {
+    response = await getClient().models.generateContent({
+      model: MODEL,
+      contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        temperature: 0.2,
+        maxOutputTokens: 600,
       },
-    ],
-    messages: [{ role: 'user', content: userMessage }],
-  });
-
-  const textBlock = response.content.find((b) => b.type === 'text');
-  if (!textBlock || textBlock.type !== 'text') {
+    });
+  } catch (err) {
+    console.error('[synthesize] gemini call failed:', err instanceof Error ? err.message : err);
     return "I couldn't generate an answer for that. The matching items are listed below.";
   }
-  return textBlock.text.trim();
+
+  // @google/genai exposes a convenience accessor `.text`; fall back to the
+  // raw candidates structure if it's missing.
+  const r = response as {
+    text?: string;
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  const text =
+    typeof r.text === 'string' && r.text.trim()
+      ? r.text
+      : r.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('').trim();
+
+  if (!text) {
+    return "I couldn't generate an answer for that. The matching items are listed below.";
+  }
+  return text.trim();
 }

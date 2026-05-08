@@ -17,10 +17,8 @@
 //   npm run backfill:bos-committees -- --limit 1     # smoke test
 //   npm run backfill:bos-committees -- --source bos-budget   # one source
 
-// Workaround: Node's `--env-file` silently drops the longest var in our
-// .env.local (ANTHROPIC_API_KEY). dotenv reads the file correctly. We use
-// override:true because some shells inherit an empty ANTHROPIC_API_KEY from
-// CI configuration, and override:false would respect that empty value.
+// Read .env.local with dotenv (override) for parity with the runtime env
+// the scrapers see when invoked via `tsx --env-file=.env.local`.
 import dotenv from 'dotenv';
 dotenv.config({ path: '.env.local', override: true });
 
@@ -53,14 +51,13 @@ async function gatherTextFromLink(
   maxChars: number,
 ): Promise<string> {
   if (url.toLowerCase().endsWith('.pdf') || url.includes('View.ashx')) {
-    try {
-      const { bytes } = await fetchBytes(url);
-      const r = await extractPdfText(bytes);
-      return r.text.slice(0, maxChars);
-    } catch (err) {
-      console.warn(`[backfill-bos] PDF fetch failed ${url}:`, err instanceof Error ? err.message : err);
+    const r = await fetchBytes(url);
+    if (!r.ok) {
+      console.warn(`[backfill-bos] PDF fetch failed ${url}: ${r.message}`);
       return '';
     }
+    const parsed = await extractPdfText(r.bytes);
+    return parsed.text.slice(0, maxChars);
   }
   try {
     await page.goto(url, { waitUntil: 'networkidle', timeout: 30_000 });
@@ -76,17 +73,17 @@ async function gatherTextFromLink(
     );
     for (const pdfUrl of pdfLinks.slice(0, 8)) {
       if (totalLen >= maxChars) break;
-      try {
-        const { bytes } = await fetchBytes(pdfUrl);
-        const r = await extractPdfText(bytes);
-        if (r.text) {
-          const label = pdfUrl.split('/').pop() ?? pdfUrl;
-          const block = `\n--- ${label} ---\n${r.text.slice(0, MAX_TEXT_PER_PDF)}`;
-          parts.push(block);
-          totalLen += block.length;
-        }
-      } catch (err) {
-        console.warn(`[backfill-bos] PDF parse failed ${pdfUrl}:`, err instanceof Error ? err.message : err);
+      const r = await fetchBytes(pdfUrl);
+      if (!r.ok) {
+        console.warn(`[backfill-bos] PDF fetch failed ${pdfUrl}: ${r.message}`);
+        continue;
+      }
+      const parsed = await extractPdfText(r.bytes);
+      if (parsed.text) {
+        const label = pdfUrl.split('/').pop() ?? pdfUrl;
+        const block = `\n--- ${label} ---\n${parsed.text.slice(0, MAX_TEXT_PER_PDF)}`;
+        parts.push(block);
+        totalLen += block.length;
       }
     }
     return parts.join('\n').slice(0, maxChars);
@@ -209,7 +206,15 @@ async function main() {
     console.log(`[backfill-bos]   gathered ${agendaText.length} chars → LLM`);
     // Extract first; only delete stale rows if the new extraction succeeded.
     // Otherwise a transient LLM failure would wipe the existing v2 data.
-    const { items, promptVersion, model } = await extractAgendaItems(agendaText, m.title);
+    // (extractAgendaItems now THROWS on hard LLM failure after retries —
+    // catch and keep stale rows rather than crashing the whole backfill.)
+    let items, promptVersion, model;
+    try {
+      ({ items, promptVersion, model } = await extractAgendaItems(agendaText, m.title));
+    } catch (err) {
+      console.warn(`[backfill-bos]   LLM threw (${err instanceof Error ? err.message : err}) — keeping stale items`);
+      continue;
+    }
     if (items.length === 0) {
       console.warn(`[backfill-bos]   LLM returned 0 items — keeping ${m.item_count} stale item(s)`);
       continue;

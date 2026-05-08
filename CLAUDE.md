@@ -7,8 +7,8 @@ Guidance for Claude working in this repo. Read this before making changes.
 **SF Civic Tracker** — a Next.js + Supabase site that aggregates SF civic
 activity from multiple sources (Planning Commission, Historic Preservation
 Commission, Board of Supervisors + standing committees, SFMTA Board,
-public hearing notices), runs each meeting's agenda through Claude
-Haiku 4.5 to extract structured items, and lets visitors filter by
+public hearing notices), runs each meeting's agenda through **Google
+Gemini 2.5 Flash** to extract structured items, and lets visitors filter by
 neighborhood, district, or topic and follow individual pieces of
 legislation across committees.
 
@@ -105,9 +105,15 @@ standard scaffolding.)
   scrapers share `lib/bos-shared.ts` and scrape `sf.gov`. SFMTA scrapes
   `sfmta.com` directly (BoardDocs blocks automated fetches). No Legistar
   API (non-viable for SF; see below).
-- **LLM:** `claude-haiku-4-5-20251001` via `@anthropic-ai/sdk`. Tool-use with
-  forced `record_agenda_items` tool for structured output. Prompt caching on
-  system prompt + tool schema.
+- **LLM:** `gemini-2.5-flash` via `@google/genai` (v4 onwards; v3 used Claude
+  Haiku 4.5). Function-calling with forced `record_agenda_items` declaration
+  for structured output. No explicit context caching — Flash's 1024-token
+  cache minimum is bigger than our system prompt + tool schema combined and
+  Flash pricing is already low. Retries 3× on transient (5xx/429/network)
+  failures with full-jitter backoff; hard failures bubble out so the pipeline
+  marks the meeting `extraction_status='failed'` (re-tried on next run).
+  Scanned PDFs route to a multimodal entrypoint that sends bytes inline,
+  sidestepping OCR.
 
 ## Repo layout (the parts you'll touch)
 
@@ -132,10 +138,18 @@ scraper/
   lib/pdf.ts                   pdf-parse wrapper (PINNED v1.1.1)
   lib/storage.ts               Supabase Storage upload helper
   lib/hash.ts                  sha256 helper
-  lib/llm.ts                   extractAgendaItems() — Anthropic call
+  lib/llm.ts                   extractAgendaItems() + extractAgendaItemsMultimodal()
+                               — Gemini 2.5 Flash via @google/genai. Retry
+                               with exponential backoff. Scanned PDFs route
+                               through the multimodal entrypoint.
   lib/extract-pipeline.ts      persistExtractedItems() — shared post-LLM
                                pipeline (geocode → polygon-resolve → insert
-                               agenda_items + agenda_item_locations)
+                               agenda_items + agenda_item_locations).
+                               Also owns the meetings.extraction_status
+                               state machine (pending → success/partial/failed)
+                               and runs the multimodal fallback when text-only
+                               extraction returns thin results on a meeting
+                               with scanned PDFs.
   lib/geocode.ts               Nominatim geocoder (1.1s throttle, SF bbox)
                                with cache-first lookup against address_cache
   lib/geo.ts                   Hand-rolled point-in-polygon (handles
@@ -179,6 +193,13 @@ supabase/
   migrations/0002_locations_and_actions.sql  Adds agenda_item_locations,
                                              address_cache, and 4 action-layer
                                              columns on agenda_items
+  migrations/0007_extraction_status.sql      Adds extraction_status state-
+                                             machine columns on meetings
+                                             (pending/success/partial/failed/
+                                             stale) + last_prompt_version,
+                                             attempt count, fetch_warnings.
+                                             See "Extraction state machine"
+                                             below.
   seed.sql                                   sources rows
 ```
 
@@ -194,14 +215,52 @@ supabase/
 When the model returns a tag, `filterEnum()` in `scraper/lib/llm.ts` drops
 anything not in the enum. Don't add a tag value anywhere else.
 
-### Idempotency = sha256(event-page HTML)
+### Idempotency = sha256(event-page HTML) + extraction_status + prompt_version
 
 The scraper hashes the **event page HTML** (not the agenda PDF, not the
-packet HTML) and writes it as `meetings.content_hash`. Same hash → skip.
-Re-scraping picks up new meetings but doesn't re-extract existing ones —
-to force a re-extract, delete the row and re-scrape, or call
-`extractExisting()` (only useful when storage has full text, which it
-doesn't for packet/PDF cases).
+packet HTML) and writes it as `meetings.content_hash`. The skip predicate
+is now a three-tuple, not just hash equality:
+
+  skip iff content_hash matches AND extraction_status='success'
+       AND last_prompt_version = current PROMPT_VERSION
+
+Otherwise the scraper re-runs extraction for that meeting_id (re-fetching
+PDFs as needed). This unlocks idempotent retries:
+
+  - A meeting whose v3-era extraction returned 0 items because of a
+    transient LLM 5xx is now `extraction_status='failed'` (or stays
+    `partial` from the migration backfill) and gets re-extracted.
+  - A row whose extraction succeeded under v3 but lacks `last_prompt_version
+    = v4` will be re-extracted on the next scrape after a prompt bump,
+    progressively replacing v3 items with v4 items.
+  - A successful, current row (`success` + current version) is genuinely
+    skipped — same hash, nothing changed.
+
+`scraper/lib/extract-pipeline.ts:checkMeetingFreshness()` is the helper
+each source uses; never re-implement the check inline.
+
+### Extraction state machine
+
+`meetings.extraction_status` (text, NOT NULL, default `'pending'`,
+constrained to `pending|success|partial|failed|stale`).
+
+  - `pending` — newly inserted, no extraction attempt yet.
+  - `success` — items extracted, gather had no warnings, all linked PDFs
+    fetched. The skip predicate above lets this row pass through.
+  - `partial` — items extracted, but at least one PDF failed to fetch /
+    parse OR there were `fetch_warnings`. Will be re-extracted on next
+    scrape. Surfaced on `/analytics`.
+  - `failed` — LLM threw after retries AND multimodal fallback (if any)
+    also failed. `extraction_error` holds the last message. Re-extracted
+    on next scrape.
+  - `stale` — reserved for a future maintenance step that proactively
+    flips `success`+old-version rows. Right now we rely on the freshness
+    check to do this on demand.
+
+Sister columns added in migration 0005:
+`extraction_attempt_count`, `last_extracted_at`, `last_prompt_version`,
+`extraction_error`, `expected_pdf_count`, `fetched_pdf_count`,
+`fetch_warnings` (jsonb). `persistExtractedItems()` writes them all.
 
 ### Scraping flow (Planning Commission)
 
@@ -213,10 +272,12 @@ doesn't for packet/PDF cases).
    current page contains no `Month YYYY` headers from `SCRAPE_FROM`'s year.
 3. For each event URL: visit, extract `meeting_date`, look for AGENDA,
    SUPPORTING, MINUTES button links by visible text.
-4. **LLM input strategy** (in `scraper/sources/planning.ts`):
-   - **Past** meetings (`meeting_date < today`): AGENDA + MINUTES only.
-     Skip SUPPORTING — the staff reports are bulky and largely redundant
-     with what minutes already capture.
+4. **LLM input strategy** (in `scraper/sources/planning.ts`, mirrored in `hpc.ts`):
+   - **Past** meetings (`meeting_date < today`): AGENDA + MINUTES + SUPPORTING.
+     v3 dropped SUPPORTING for past meetings to save tokens; v4 reverses that
+     — Gemini Flash's 1M-token window absorbs the full packet and the staff
+     reports add detail (specific findings, conditions of approval) that the
+     minutes alone don't capture.
    - **Future** meetings: AGENDA if posted (canonical), else SUPPORTING
      (packet) for enrichment until the agenda PDF goes up ~6 days pre-hearing.
 5. **agenda_url for the UI**:
@@ -225,11 +286,14 @@ doesn't for packet/PDF cases).
    - Future: AGENDA → SUPPORTING → event-URL fallback chain.
 6. `gatherTextFromLink()` handles both PDF URLs (downloads + parses directly)
    and resource pages (visits, lists `.pdf` links, downloads each, concatenates
-   text capped at 20k chars/PDF and 80k chars/resource).
+   text capped at 100k chars/PDF and 400k chars/resource — caps lifted in v4
+   from the v3-era 20k/80k Claude budgets). Returns per-PDF outcomes via the
+   shared `GatherStats` struct: scanned-PDF bytes for multimodal fallback,
+   fetch warnings, expected/fetched counts.
 7. `SCRAPE_FROM` constant = `${current_year}-01-01`. Per-event date guard
    skips anything before that.
 
-### pdf-parse is pinned to v1.1.1
+### pdf-parse is pinned to v1.1.1 (and scanned PDFs route to Gemini multimodal)
 
 `package.json` pins `"pdf-parse": "1.1.1"` (no caret) because:
 - v1 has the stable default-callable export `pdfParse(buf) → { text }`
@@ -243,6 +307,15 @@ fixing the wrapper in `scraper/lib/pdf.ts`.
 The package emits `Warning: TT: undefined function: 21/32` lines on stderr
 for some SF Planning PDFs — those are pdf.js font-glyph warnings; text
 still extracts fine. Cosmetic, ignore them.
+
+When `pdf-parse` returns `needsOcr: true` (image-only / scanned PDF, very
+short text), the gather function pushes the raw bytes onto `GatherStats.
+scannedPdfs` instead of dropping the PDF. `persistExtractedItems` runs
+the text-only Gemini pass first; if items returned < 3 AND scanned PDFs
+were collected, it retries via `extractAgendaItemsMultimodal` (PDF bytes
+sent inline as `inlineData`) and merges items. This replaces the v3-era
+"scanned PDF → 0 chars → empty extraction" failure mode with a working
+path. We do NOT need a Tesseract / OCR dep — Gemini handles it natively.
 
 ### `meetings` schema constraints
 
@@ -327,18 +400,33 @@ lower Nob Hill → Financial District). This is correct and intentional —
 the same polygons drive the scraper-side geocoding pipeline, so results
 are internally consistent.
 
-### Anthropic SDK call
+### Gemini SDK call
 
 In `scraper/lib/llm.ts`:
-- `system` is an array of one text block with `cache_control: { type: 'ephemeral' }`.
-- `tools` is an array of one tool (`record_agenda_items`) also marked
-  ephemeral. Both cache markers are required so prompt caching covers both
-  blocks across meetings in one run.
-- `tool_choice: { type: 'tool', name: TOOL_NAME }` forces structured output.
-- The user message slices `text` to 50k chars defensively (the gathering
-  step in planning.ts already caps at 100k–120k, but never trust the caller).
-- Errors are caught — `extractAgendaItems` returns `{ items: [] }` rather
-  than throwing, so one bad meeting can't kill a whole scrape run.
+- Client: `new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })` from
+  `@google/genai`. Singleton — created lazily on first call.
+- Model: `gemini-2.5-flash`. 1M-token context window, but we cap text input
+  at 500k chars defensively (the gather step caps at 400k/resource, 500k total).
+- Function calling for forced structured output:
+  - `config.tools` carries one `functionDeclarations` entry (`record_agenda_items`)
+    whose `parameters` are the Gemini-native (uppercase, `nullable`) schema in
+    `scraper/prompts/extract.ts`.
+  - `config.toolConfig.functionCallingConfig.mode = FunctionCallingConfigMode.ANY`
+    plus `allowedFunctionNames: [TOOL_NAME]` forces the model to call the
+    declared function on every response.
+- No prompt caching. Flash's explicit cache requires 1024 tokens minimum;
+  our system prompt + tool schema are well below that. Don't try to add
+  caching back without checking that lower bound.
+- Retry policy: 3 attempts with 250ms / 1s / 4s backoff (full-jitter).
+  Retries only on transient errors (5xx, 408, 429, network). 4xx schema /
+  auth errors fail fast.
+- After exhausted retries, **throws**. The pipeline catches the throw and
+  marks the meeting `extraction_status='failed'` so it can be retried on a
+  future run, instead of the v3-era silent `{ items: [] }` return that locked
+  meetings at 0 items forever.
+- Multimodal entrypoint: `extractAgendaItemsMultimodal(text, pdfs[], title)`
+  attaches up to 5 inline PDFs (capped at ~15 MB total payload) for
+  scanned-document handling. Used as a fallback by `persistExtractedItems`.
 
 ## Common commands
 
@@ -362,6 +450,10 @@ npm run fetch:geo              # re-download SF neighborhood + district polygons
                                # from DataSF into scraper/data/
 npm run enrich:legislation     # populate legislation table from sfgov.legistar.com
                                # HTML (keyed on matter_file_number from agenda_items)
+npm run backfill:prompt-version       # generic re-extract for stale rows
+                                      #   --source <id>  | --status <s>
+                                      #   --limit <N>    | --rate <perSec>
+npm run backfill:bos-minutes          # re-walk BOS minutes for past meetings
 ```
 
 ## Planned architecture (M11–M15)
@@ -537,9 +629,26 @@ scraping for BOS and its standing committees.
   Adding a new committee = new thin caller + seed row + npm script +
   GHA matrix entry. Don't duplicate bos-shared.ts logic.
 - **Don't bump `PROMPT_VERSION` without re-running the smoke test.**
-  Current: `v3` (added `matter_file_number`). The version stamps every
-  `agenda_items` row so we can backfill rows extracted under older
-  prompts when the schema or instructions meaningfully change.
+  Current: `v4` — switched LLM from Claude Haiku 4.5 to Gemini 2.5 Flash,
+  lifted per-PDF/per-resource/per-call content caps, included SUPPORTING
+  docs for past Planning/HPC meetings, and added scanned-PDF multimodal
+  fallback. The version stamps every `agenda_items` row AND every
+  `meetings.last_prompt_version` so we can target backfills.
+- **Don't widen the per-PDF / per-resource / per-call content caps further
+  without checking the Gemini token budget.** Current caps (100k / 400k /
+  500k chars) leave ~5× headroom against Flash's 1M-token window; doubling
+  them would push us into the noisy zone where the model starts losing
+  precision on long inputs.
+- **Don't skip SUPPORTING for past Planning/HPC meetings.** That was the
+  v3-era trade-off (token-budget driven) and is no longer needed under
+  Gemini Flash. Past = AGENDA + MINUTES + SUPPORTING; future = AGENDA →
+  SUPPORTING.
+- **Don't add Anthropic / Claude back as the LLM** without a deliberate
+  reason. The Gemini swap (v4) was driven by Flash's wider context window,
+  multimodal PDF support, and lower cost. If you need to switch, update
+  `lib/llm.ts`, `prompts/extract.ts` (TOOL_SCHEMA shape differs by SDK),
+  the `/api/search` route, .env.example, GHA workflow, and bump
+  PROMPT_VERSION.
 - **For new BOS file numbers showing up in agendas, write to
   `agenda_items.matter_file_number` only.** The future `legislation`
   table is the enrichment target — agenda extraction is discovery only.

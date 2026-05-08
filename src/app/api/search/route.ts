@@ -1,6 +1,6 @@
-// JSON wrapper around the shared parser in src/lib/search/parse-query.ts.
-// Useful for scripting / external clients that want filter parsing without
-// the full /ask synthesis step (which lives at src/app/ask/page.tsx).
+// Thin JSON wrapper around the shared parser. The /ask page calls parseQuery
+// directly (server-rendered); this endpoint exists for any client-side caller
+// that wants the URL-filter mapping without committing to navigation to /ask.
 
 import { parseQuery, ParseError } from '@/lib/search/parse-query';
 
@@ -15,6 +15,7 @@ export async function GET(req: Request) {
     if (err instanceof ParseError) {
       return Response.json({ error: err.message }, { status: err.status });
     }
-    throw err;
+    console.error('[search] unexpected:', err instanceof Error ? err.message : err);
+    return Response.json({ error: 'parse failed' }, { status: 502 });
   }
 }
