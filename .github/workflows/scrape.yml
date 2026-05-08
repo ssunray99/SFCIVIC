@@ -71,12 +71,20 @@ jobs:
       #   GEMINI_API_KEY            — Google Gemini API key for LLM extraction
       #                               (https://aistudio.google.com/apikey)
       - name: Write .env.local from secrets
+        # tr -d '\r\n' strips any trailing CR/LF that crept in when the
+        # secret was pasted into the GitHub UI. A trailing newline in
+        # SUPABASE_URL produces malformed REST URLs that PostgREST rejects
+        # with PGRST125 ("Invalid path specified in request URL").
         run: |
-          printf 'SUPABASE_URL=%s\nSUPABASE_SERVICE_ROLE_KEY=%s\nGEMINI_API_KEY=%s\n' \
-            "${{ secrets.SUPABASE_URL }}" \
-            "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
-            "${{ secrets.GEMINI_API_KEY }}" \
-            > .env.local
+          {
+            printf 'SUPABASE_URL='
+            printf '%s' "${{ secrets.SUPABASE_URL }}" | tr -d '\r\n'
+            printf '\nSUPABASE_SERVICE_ROLE_KEY='
+            printf '%s' "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" | tr -d '\r\n'
+            printf '\nGEMINI_API_KEY='
+            printf '%s' "${{ secrets.GEMINI_API_KEY }}" | tr -d '\r\n'
+            printf '\n'
+          } > .env.local
 
       - name: Run ${{ matrix.source }} scraper
         run: npm run scrape:${{ matrix.source }}
@@ -112,12 +120,20 @@ jobs:
         if: steps.pw-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps chromium
       - name: Write .env.local from secrets
+        # tr -d '\r\n' strips any trailing CR/LF that crept in when the
+        # secret was pasted into the GitHub UI. A trailing newline in
+        # SUPABASE_URL produces malformed REST URLs that PostgREST rejects
+        # with PGRST125 ("Invalid path specified in request URL").
         run: |
-          printf 'SUPABASE_URL=%s\nSUPABASE_SERVICE_ROLE_KEY=%s\nGEMINI_API_KEY=%s\n' \
-            "${{ secrets.SUPABASE_URL }}" \
-            "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
-            "${{ secrets.GEMINI_API_KEY }}" \
-            > .env.local
+          {
+            printf 'SUPABASE_URL='
+            printf '%s' "${{ secrets.SUPABASE_URL }}" | tr -d '\r\n'
+            printf '\nSUPABASE_SERVICE_ROLE_KEY='
+            printf '%s' "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" | tr -d '\r\n'
+            printf '\nGEMINI_API_KEY='
+            printf '%s' "${{ secrets.GEMINI_API_KEY }}" | tr -d '\r\n'
+            printf '\n'
+          } > .env.local
       - name: Enrich Legistar HTML
         run: npm run enrich:legislation
 
@@ -151,11 +167,19 @@ jobs:
         if: steps.pw-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps chromium
       - name: Write .env.local from secrets
+        # tr -d '\r\n' strips any trailing CR/LF that crept in when the
+        # secret was pasted into the GitHub UI. A trailing newline in
+        # SUPABASE_URL produces malformed REST URLs that PostgREST rejects
+        # with PGRST125 ("Invalid path specified in request URL").
         run: |
-          printf 'SUPABASE_URL=%s\nSUPABASE_SERVICE_ROLE_KEY=%s\nGEMINI_API_KEY=%s\n' \
-            "${{ secrets.SUPABASE_URL }}" \
-            "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
-            "${{ secrets.GEMINI_API_KEY }}" \
-            > .env.local
+          {
+            printf 'SUPABASE_URL='
+            printf '%s' "${{ secrets.SUPABASE_URL }}" | tr -d '\r\n'
+            printf '\nSUPABASE_SERVICE_ROLE_KEY='
+            printf '%s' "${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" | tr -d '\r\n'
+            printf '\nGEMINI_API_KEY='
+            printf '%s' "${{ secrets.GEMINI_API_KEY }}" | tr -d '\r\n'
+            printf '\n'
+          } > .env.local
       - name: Backfill 50 stale rows
         run: npm run backfill:prompt-version -- --limit 50
