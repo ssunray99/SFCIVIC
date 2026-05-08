@@ -150,7 +150,9 @@ jobs:
     name: Backfill prompt-version rows
     needs: scrape
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Each backfilled meeting costs ~30-60s (page nav + PDF gather + Gemini
+    # call). 25 rows fits comfortably under 60m with headroom for slow PDFs.
+    timeout-minutes: 60
     if: ${{ always() }}
     steps:
       - uses: actions/checkout@v4
@@ -190,5 +192,7 @@ jobs:
       - name: '🔍 CI env + query diagnostic'
         continue-on-error: true
         run: npx tsx --env-file=.env.local scraper/setup/_ci-env-diag.ts
-      - name: Backfill 50 stale rows
-        run: npm run backfill:prompt-version -- --limit 50
+      - name: Backfill 25 stale rows
+        # 25/run × daily ≈ 175/week; 615 v3 + v2 + v1 rows drain in ~25 days.
+        # If you want it faster, bump --limit and/or timeout-minutes.
+        run: npm run backfill:prompt-version -- --limit 25
